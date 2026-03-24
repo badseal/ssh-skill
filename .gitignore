@@ -53,3 +53,6 @@ id_ed25519*
 # Local configuration
 config.local.json
 .env
+
+# Docs (本地文档，不提交)
+docs/

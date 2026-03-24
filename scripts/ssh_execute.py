@@ -118,10 +118,41 @@ def start_daemon_background(alias):
 
 
 def direct_execute(alias, command, timeout):
-    """直连执行命令（智能选择客户端类型）"""
+    """直连执行命令（智能选择客户端类型，支持降级到原生 SSH）"""
     from config_v3 import SSHConfigLoaderV3
+    from native_ssh_fallback import should_use_native_ssh, execute_native_ssh, check_ssh_agent
 
     loader = SSHConfigLoaderV3()
+
+    # 加载 SSH 配置
+    ssh_config = loader.load_ssh_config(alias)
+    metadata = {}
+    try:
+        metadata = loader.load_metadata(alias)
+    except:
+        pass
+
+    # 检测是否应该降级到原生 SSH
+    should_fallback, reason = should_use_native_ssh(ssh_config, metadata)
+
+    if should_fallback:
+        # 检查 ssh-agent 状态（如果涉及密钥认证）
+        agent_available, agent_msg = check_ssh_agent()
+
+        # 如果原因包含 passphrase 且 ssh-agent 不可用，给出提示但仍然尝试
+        if 'passphrase' in reason.lower() and not agent_available:
+            import sys
+            print(f"\n⚠️  警告：检测到需要 passphrase 的密钥，但 ssh-agent 未配置", file=sys.stderr)
+            print(f"ssh-agent 状态: {agent_msg}", file=sys.stderr)
+            print(f"\n建议配置 ssh-agent 以避免每次输入密码：", file=sys.stderr)
+            print(f"1. 启动 ssh-agent: eval $(ssh-agent)", file=sys.stderr)
+            print(f"2. 添加密钥: ssh-add ~/.ssh/your_key", file=sys.stderr)
+            print(f"\n现在将使用原生 SSH（需要交互式输入 passphrase）...\n", file=sys.stderr)
+
+        # 使用原生 SSH 执行
+        result = execute_native_ssh(alias, command, timeout)
+        result['fallback_reason'] = reason
+        return result
 
     # 使用智能选择：密钥认证 → NativeSSHClient，密码认证 → ParamikoClient
     client = loader.from_alias(alias)

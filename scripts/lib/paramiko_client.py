@@ -107,24 +107,26 @@ class ConnectionPool:
                         allow_agent=False
                     )
                 elif key_file:
-                    # 密钥认证
-                    pkey = None
-                    if key_passphrase:
-                        pkey = paramiko.RSAKey.from_private_key_file(key_file, password=key_passphrase)
-                    else:
-                        pkey = paramiko.RSAKey.from_private_key_file(key_file)
-
+                    # 密钥认证 - 优先尝试 ssh-agent
                     client.connect(
                         hostname=host,
                         port=port,
                         username=user,
-                        pkey=pkey,
+                        key_filename=key_file,
                         timeout=timeout,
-                        look_for_keys=False,
-                        allow_agent=False
+                        look_for_keys=True,  # 允许查找密钥
+                        allow_agent=True     # 允许使用 ssh-agent
                     )
                 else:
-                    raise ValueError("必须提供 password 或 key_file")
+                    # 无密码无密钥 - 尝试 ssh-agent
+                    client.connect(
+                        hostname=host,
+                        port=port,
+                        username=user,
+                        timeout=timeout,
+                        look_for_keys=True,
+                        allow_agent=True
+                    )
 
                 # 加入连接池
                 self._pool[key] = (client, time.time())
