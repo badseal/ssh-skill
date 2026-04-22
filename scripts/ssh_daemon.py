@@ -54,7 +54,8 @@ def get_daemon_id(alias: str) -> str:
 
 def get_daemon_info_path(alias: str) -> str:
     """获取守护进程信息文件路径"""
-    os.makedirs(DAEMON_DIR, exist_ok=True)
+    os.makedirs(DAEMON_DIR, mode=0o700, exist_ok=True)
+    os.chmod(DAEMON_DIR, 0o700)
     return os.path.join(DAEMON_DIR, f'{get_daemon_id(alias)}.json')
 
 
@@ -174,6 +175,7 @@ class SSHDaemon:
         info_path = get_daemon_info_path(self.alias)
         with open(info_path, 'w', encoding='utf-8') as f:
             json.dump(info, f, ensure_ascii=False, indent=2)
+        os.chmod(info_path, 0o600)
 
         # 输出启动信息到 stdout
         try:

@@ -9,26 +9,13 @@ SSH Skill - 系统级SSH连接管理工具
 - 项目级配置管理
 - 流式输出和交互式会话
 - 批量并发操作
-
-快速开始:
-    from ssh_skill import SSHConfigLoader
-
-    # 加载配置
-    client = SSHConfigLoader.from_file(".ssh_config/prod.json")
-
-    # 执行命令
-    result = client.execute("whoami && hostname")
-    print(result.stdout)
-
-    # 批量操作
-    from ssh_skill import SSHCluster
-    cluster = SSHCluster.from_directory(".ssh_config/cluster/")
-    results = cluster.execute_all("uptime", parallel=True)
 """
 
-from .client import SSHClient, SSHResult
-from .config import SSHConfigLoader, ServerConfig
-from .cluster import SSHCluster, SSHBatchOperations
+from .config_v3 import SSHConfigLoaderV3
+from .native_ssh_client import NativeSSHClient, SSHResult
+from .paramiko_client import ParamikoClient
+from .cluster import SSHCluster
+from .sftp_transfer import SFTPTransfer
 from .utils import (
     check_ssh_available,
     get_ssh_version,
@@ -38,15 +25,12 @@ from .utils import (
 __version__ = "0.1.0"
 
 __all__ = [
-    # 核心类
-    "SSHClient",
+    "SSHConfigLoaderV3",
+    "NativeSSHClient",
+    "ParamikoClient",
     "SSHResult",
-    "SSHConfigLoader",
-    "ServerConfig",
     "SSHCluster",
-    "SSHBatchOperations",
-
-    # 工具函数
+    "SFTPTransfer",
     "check_ssh_available",
     "get_ssh_version",
     "validate_key_file",
