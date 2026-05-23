@@ -2,12 +2,17 @@
 
 **中文** | [English](README_EN.md)
 
-> 为 Claude Code 打造的企业级 SSH 管理工具，让远程服务器操作像本地一样简单高效
+> 为 Codex / Claude Code 打造的企业级 SSH 管理工具，让远程服务器操作像本地一样简单高效
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## 📢 最近更新
+
+### v3.3.1 - Codex 元数据兼容修复（2026-05-01）
+
+- 🧩 **Codex 兼容**：压缩 `SKILL.md` frontmatter 的 `description`，避免超过 Codex 1024 字符限制导致 skill 无法加载
+- 🛡️ **触发语义保留**：保留 SSH/server operations 强触发、禁止直接 `ssh/scp`、服务器/跳板机/传输/隧道/数据库内网访问等核心关键词
 
 ### v3.3 - Windows 原生 SSH 适配 & Passphrase 密钥支持（2026-03-24）
 
@@ -150,9 +155,10 @@ pip install paramiko
 
 ### 配置
 
-1. 将 `ssh-skill` 目录放到 `~/.claude/skills/` 下
-2. 配置 SSH 密钥或密码认证
-3. 开始使用！
+1. Codex 用户：将 `ssh-skill` 目录放到 `C:\Users\<用户名>\.agents\skills\ssh-skill\` 或当前 Codex 技能目录。
+2. Claude Code 用户：将 `ssh-skill` 目录放到 `~/.claude/skills/ssh-skill/`。
+3. 配置 SSH 密钥或密码认证。
+4. 开始使用。
 
 ## 🎬 快速开始
 
@@ -357,9 +363,9 @@ Host internal-server
     ProxyJump bastion
 ```
 
-## 🎨 与 Claude Code 集成
+## 🎨 与 Codex / Claude Code 集成
 
-在 Claude Code 中，AI 会自动使用 ssh-skill 处理所有 SSH 操作：
+在 Codex 或 Claude Code 中，AI 会根据 `SKILL.md` 的描述自动使用 ssh-skill 处理 SSH 操作：
 
 ```
 用户：在 prod-web-01 上检查 Nginx 状态
@@ -373,6 +379,10 @@ AI：[自动调用 ssh_server_transfer.py]
 ```
 
 ## 🔄 版本历史
+
+### v3.3.1 (2026-05-01)
+- 🧩 **Codex 元数据兼容修复**：压缩 `SKILL.md` frontmatter `description`，避免超过 Codex 1024 字符限制导致 skill 加载失败
+- 🛡️ **触发语义保留**：保留 SSH/server operations 强触发、禁止直接 `ssh/scp`、服务器/跳板机/传输/隧道/数据库内网访问等核心关键词
 
 ### v3.2 (2026-03-04)
 - ✨ **大文件传输优化**：智能切换传输模式（80MB 阈值）

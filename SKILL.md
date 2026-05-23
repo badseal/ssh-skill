@@ -1,12 +1,12 @@
 ---
 name: ssh-skill
-version: 3.3.0
-description: "CRITICAL: This skill MUST be used for ALL SSH operations. NEVER use bash 'ssh' or 'scp' commands directly - always use this skill instead. Triggers: ANY mention of 'SSH', 'ssh', 'remote server', 'connect to server', server IPs (e.g., 192.168.x.x, 10.0.x.x), hostnames (e.g., user@host.com, server.example.com), 'login to', 'upload to server', 'download from server', 'deploy', 'run on server', 'check server', 'server status', 'execute remotely', 'bastion host', 'jump host', '跳板机', '服务器', '远程', '连接', '登录', '上传', '下载', '部署', 'transfer between servers', '服务器间传输', '迁移', 'migrate', 'server to server', 'tunnel', 'port forward', '端口转发', '隧道', 'database', '数据库连接', 'internal service', '内网访问'. If user mentions ANY server operations or provides server connection details, use this skill. This skill provides daemon-based persistent connections, connection pooling, jump host support, server-to-server transfer, SSH tunneling, automatic error recovery, and significant performance boost. DO NOT use for: local commands, localhost, current directory operations."
+version: 3.3.1
+description: "CRITICAL: Use this skill for ALL SSH/server operations. NEVER run raw ssh/scp directly. Triggers: SSH, remote server, server IP/hostname/user@host, connect/login, run command on server, check server/status, deploy, upload/download, file transfer, bastion/jump host, server-to-server transfer, migrate, tunnel, port forward, database/internal service access, and Chinese terms: 服务器, 远程, 连接, 登录, 上传, 下载, 部署, 跳板机, 服务器间传输, 迁移, 隧道, 端口转发, 数据库连接, 内网访问. Provides persistent connections, pooling, jump hosts, SFTP, tunneling, and recovery. DO NOT use for local commands, localhost, or current-directory work."
 allowed-tools: Bash, Read, Write, Glob
 keywords: SSH,服务器,远程,连接,命令,上传,下载,文件传输,跳板机,批量,集群,deploy,部署,运维,登录,执行,查看,检查,管理,操作,访问,传输,迁移,服务器间,tunnel,隧道,端口转发,数据库,内网
 ---
 
-# SSH Skill v3.3
+# SSH Skill v3.3.1
 
 高性能 SSH 操作技能，支持守护进程长连接、自动连接复用、跳板机、批量并发、服务器间直接传输、自动错误恢复。
 
@@ -41,7 +41,7 @@ python ~/.claude/skills/ssh-skill/scripts/ssh_config_manager_v3.py list-servers
 
 展示 SSH Skill 的帮助文档。以 Markdown 格式输出以下内容：
 
-**SSH Skill v3.3 - 高性能 SSH 操作技能**
+**SSH Skill v3.3.1 - 高性能 SSH 操作技能**
 
 **核心特点：**
 - 守护进程长连接：首次连接后自动启动守护进程，后续命令响应时间从 ~0.45s 降至 ~0.12s

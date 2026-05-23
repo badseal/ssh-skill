@@ -2,12 +2,17 @@
 
 [中文](README.md) | **English**
 
-> Enterprise-grade SSH management tool for Claude Code, making remote server operations as simple and efficient as local ones
+> Enterprise-grade SSH management tool for Codex / Claude Code, making remote server operations as simple and efficient as local ones
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## 📢 Recent Updates
+
+### v3.3.1 - Codex Metadata Compatibility Fix (2026-05-01)
+
+- 🧩 **Codex compatibility**: Shortened the `SKILL.md` frontmatter `description` to stay below Codex's 1024-character limit and prevent skill loading failures
+- 🛡️ **Trigger semantics preserved**: Kept the critical SSH/server operations trigger, raw `ssh/scp` prohibition, and core server/jump-host/transfer/tunnel/database/internal-access keywords
 
 ### v3.3 - Windows Native SSH Adaptation & Passphrase Key Support (2026-03-24)
 
@@ -150,9 +155,10 @@ pip install paramiko
 
 ### Configuration
 
-1. Place the `ssh-skill` directory under `~/.claude/skills/`
-2. Configure SSH key or password authentication
-3. Start using!
+1. For Codex: place the `ssh-skill` directory under `C:\Users\<username>\.agents\skills\ssh-skill\` or your active Codex skills directory.
+2. For Claude Code: place the `ssh-skill` directory under `~/.claude/skills/ssh-skill/`.
+3. Configure SSH key or password authentication.
+4. Start using.
 
 ## 🎬 Quick Start
 
@@ -357,9 +363,9 @@ Host internal-server
     ProxyJump bastion
 ```
 
-## 🎨 Integration with Claude Code
+## 🎨 Integration with Codex / Claude Code
 
-In Claude Code, AI automatically uses ssh-skill for all SSH operations:
+In Codex or Claude Code, AI uses the `SKILL.md` description to automatically select ssh-skill for SSH operations:
 
 ```
 User: Check Nginx status on prod-web-01
@@ -373,6 +379,10 @@ AI: [Auto-calls ssh_server_transfer.py]
 ```
 
 ## 🔄 Version History
+
+### v3.3.1 (2026-05-01)
+- 🧩 **Codex metadata compatibility fix**: Shortened the `SKILL.md` frontmatter `description` to avoid Codex skill loading failures caused by the 1024-character description limit
+- 🛡️ **Trigger semantics preserved**: Kept the critical SSH/server operations trigger, raw `ssh/scp` prohibition, and core server/jump-host/transfer/tunnel/database/internal-access keywords
 
 ### v3.2 (2026-03-04)
 - ✨ **Large file transfer optimization**: Smart mode switching (80MB threshold)
