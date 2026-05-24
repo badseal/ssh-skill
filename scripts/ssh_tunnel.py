@@ -68,7 +68,8 @@ def get_tunnel_id(alias: str, local_port: int) -> str:
 
 def get_tunnel_info_path(tunnel_id: str) -> str:
     """获取 tunnel 信息文件路径"""
-    os.makedirs(TUNNEL_DIR, exist_ok=True)
+    os.makedirs(TUNNEL_DIR, mode=0o700, exist_ok=True)
+    os.chmod(TUNNEL_DIR, 0o700)
     # 使用 MD5 避免特殊字符问题
     safe_id = hashlib.md5(tunnel_id.encode('utf-8')).hexdigest()[:16]
     return os.path.join(TUNNEL_DIR, f'{safe_id}.json')
@@ -208,6 +209,7 @@ class SSHTunnel:
         info_path = get_tunnel_info_path(self.tunnel_id)
         with open(info_path, 'w', encoding='utf-8') as f:
             json.dump(info, f, ensure_ascii=False, indent=2)
+        os.chmod(info_path, 0o600)
 
         # 输出启动信息
         print(json.dumps({

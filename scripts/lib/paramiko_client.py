@@ -260,22 +260,25 @@ class ParamikoClient:
         import stat
         import os
 
-        # 创建临时脚本文件
         fd, script_path = tempfile.mkstemp(suffix='.sh' if os.name != 'nt' else '.bat', text=True)
+        try:
+            if os.name == 'nt':
+                script_content = f'@echo off\necho {self.password}\n'
+            else:
+                script_content = f'#!/bin/sh\necho "{self.password}"\n'
 
-        if os.name == 'nt':
-            # Windows 批处理脚本
-            script_content = f'@echo off\necho {self.password}\n'
-        else:
-            # Unix shell 脚本
-            script_content = f'#!/bin/sh\necho "{self.password}"\n'
+            with os.fdopen(fd, 'w') as f:
+                f.write(script_content)
+            fd = -1  # fd 已被 os.fdopen 接管并关闭
 
-        with os.fdopen(fd, 'w') as f:
-            f.write(script_content)
-
-        # 设置可执行权限（Unix）
-        if os.name != 'nt':
-            os.chmod(script_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+            if os.name != 'nt':
+                os.chmod(script_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+        except Exception:
+            if fd >= 0:
+                os.close(fd)
+            if os.path.exists(script_path):
+                os.unlink(script_path)
+            raise
 
         return script_path
 
