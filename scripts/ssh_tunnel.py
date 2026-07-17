@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# /// script
+# requires-python = ">=3.8"
+# dependencies = ["paramiko"]
+# ///
 """
 SSH Tunnel 守护进程 v1.0
 
@@ -7,30 +11,30 @@ SSH Tunnel 守护进程 v1.0
 自动启动、空闲超时自动退出、自动重连。
 
 用法：
-    python ssh_tunnel.py start <alias> --remote-port <port> [--local-port <port>] [--remote-host <host>]
-    python ssh_tunnel.py list
-    python ssh_tunnel.py status <tunnel-id>
-    python ssh_tunnel.py stop <tunnel-id>
-    python ssh_tunnel.py stop-all <alias>
+    uv run ssh_tunnel.py start <alias> --remote-port <port> [--local-port <port>] [--remote-host <host>]
+    uv run ssh_tunnel.py list
+    uv run ssh_tunnel.py status <tunnel-id>
+    uv run ssh_tunnel.py stop <tunnel-id>
+    uv run ssh_tunnel.py stop-all <alias>
 
 示例：
     # 转发远程 MySQL（自动分配本地端口）
-    python ssh_tunnel.py start prod-db-01 --remote-port 3306
+    uv run ssh_tunnel.py start prod-db-01 --remote-port 3306
 
     # 指定本地端口
-    python ssh_tunnel.py start prod-db-01 --local-port 3306 --remote-port 3306
+    uv run ssh_tunnel.py start prod-db-01 --local-port 3306 --remote-port 3306
 
     # 转发到远程的其他主机
-    python ssh_tunnel.py start prod-web-01 --remote-host 192.168.1.100 --remote-port 8080
+    uv run ssh_tunnel.py start prod-web-01 --remote-host 192.168.1.100 --remote-port 8080
 
     # 查看所有活动的 tunnel
-    python ssh_tunnel.py list
+    uv run ssh_tunnel.py list
 
     # 停止特定 tunnel
-    python ssh_tunnel.py stop prod-db-01-3306
+    uv run ssh_tunnel.py stop prod-db-01-3306
 
     # 停止服务器的所有 tunnel
-    python ssh_tunnel.py stop-all prod-db-01
+    uv run ssh_tunnel.py stop-all prod-db-01
 """
 
 import sys
@@ -808,4 +812,3 @@ def main():
 
 if __name__ == '__main__':
     sys.exit(main())
-

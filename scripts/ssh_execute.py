@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# /// script
+# requires-python = ">=3.8"
+# dependencies = ["paramiko"]
+# ///
 """
 SSH命令执行CLI工具 v3.0
 
@@ -7,12 +11,12 @@ SSH命令执行CLI工具 v3.0
 自动检测守护进程：有则走长连接，无则走直连。
 
 用法：
-    python ssh_execute.py <alias> <command> [--timeout TIMEOUT]
-    python ssh_execute.py <alias> <command> --no-daemon
+    uv run ssh_execute.py <alias> <command> [--timeout TIMEOUT]
+    uv run ssh_execute.py <alias> <command> --no-daemon
 
 示例：
-    python ssh_execute.py prod-web-01 "whoami && hostname"
-    python ssh_execute.py DEV-002 "df -h" --timeout 60
+    uv run ssh_execute.py prod-web-01 "whoami && hostname"
+    uv run ssh_execute.py DEV-002 "df -h" --timeout 60
 """
 
 import sys

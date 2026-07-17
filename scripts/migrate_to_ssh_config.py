@@ -10,7 +10,7 @@ JSON 配置迁移到 SSH Config 工具
 4. 备份原有配置
 
 用法：
-    python migrate_to_ssh_config.py \\
+    uv run migrate_to_ssh_config.py \\
       --source ~/.ssh/server_config \\
       --output ~/.ssh/config \\
       --metadata ~/.ssh/config_metadata.json \\

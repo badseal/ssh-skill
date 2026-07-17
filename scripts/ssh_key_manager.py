@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# /// script
+# requires-python = ">=3.8"
+# dependencies = ["paramiko"]
+# ///
 """
 SSH 密钥管理工具 v1.0
 
@@ -12,19 +16,19 @@ SSH 密钥管理工具 v1.0
 
 用法：
     # 单台服务器添加密钥
-    python ssh_key_manager.py add --host esxi-01 --key ~/.ssh/id_ed25519.pub
+    uv run ssh_key_manager.py add --host esxi-01 --key ~/.ssh/id_ed25519.pub
 
     # 批量添加
-    python ssh_key_manager.py add --hosts "esxi-01,mgmt-01,dev-001" --key ~/.ssh/id_ed25519.pub
+    uv run ssh_key_manager.py add --hosts "esxi-01,mgmt-01,dev-001" --key ~/.ssh/id_ed25519.pub
 
     # 所有服务器
-    python ssh_key_manager.py add --all --key ~/.ssh/id_ed25519.pub
+    uv run ssh_key_manager.py add --all --key ~/.ssh/id_ed25519.pub
 
     # 验证密钥
-    python ssh_key_manager.py verify --host esxi-01 --key ~/.ssh/id_ed25519.pub
+    uv run ssh_key_manager.py verify --host esxi-01 --key ~/.ssh/id_ed25519.pub
 
     # 回滚操作
-    python ssh_key_manager.py rollback --host esxi-01
+    uv run ssh_key_manager.py rollback --host esxi-01
 
 作者：张阳 (zhangyang@bjued.cn)
 日期：2026-03-04
