@@ -1,25 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# /// script
+# requires-python = ">=3.8"
+# dependencies = ["paramiko"]
+# ///
 """
 SSH文件下载CLI工具 v3.1
 
 支持通过别名下载文件，SFTP 高级功能：断点续传、目录递归下载、进度显示
 
 用法：
-    python ssh_download.py <alias> <remote_path> <local_path> [options]
+    uv run ssh_download.py <alias> <remote_path> <local_path> [options]
 
 示例：
     # 下载单个文件
-    python ssh_download.py prod-web-01 /var/log/app.log ./app.log
+    uv run ssh_download.py prod-web-01 /var/log/app.log ./app.log
 
     # 断点续传
-    python ssh_download.py prod-web-01 /tmp/large-file.iso ./large-file.iso --resume
+    uv run ssh_download.py prod-web-01 /tmp/large-file.iso ./large-file.iso --resume
 
     # 下载整个目录
-    python ssh_download.py prod-web-01 /var/log/ ./logs/ --recursive
+    uv run ssh_download.py prod-web-01 /var/log/ ./logs/ --recursive
 
     # 下载目录 + 断点续传
-    python ssh_download.py prod-web-01 /opt/data/ ./data/ --recursive --resume
+    uv run ssh_download.py prod-web-01 /opt/data/ ./data/ --recursive --resume
 """
 
 import sys

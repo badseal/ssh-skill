@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# /// script
+# requires-python = ">=3.8"
+# dependencies = ["paramiko"]
+# ///
 """
 部署公钥到远程服务器
 

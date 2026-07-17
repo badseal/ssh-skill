@@ -2,12 +2,17 @@
 
 **中文** | [English](README_EN.md)
 
-> 为 Codex / Claude Code 打造的企业级 SSH 管理工具，让远程服务器操作像本地一样简单高效
+> 面向支持 Agent Skills 的 AI 编程 Agent，令远程服务器操作像本地一样简单高效
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## 📢 最近更新
+
+### 开发中 - Agent 通用化与 uv 隔离运行
+
+- 🤖 **Agent 通用化**：脚本相对于当前 `SKILL.md` 定位，不再绑定特定 Agent 的安装目录
+- 📦 **uv 隔离依赖**：入口脚本使用 PEP 723 声明 paramiko，无需修改系统 Python 环境
 
 ### v3.3.1 - Codex 元数据兼容修复（2026-05-01）
 
@@ -33,7 +38,7 @@
 | **守护进程** | **~0.12s** | **~1.2s** | **~3.6s** | **🔥 3.75x** |
 
 - 首次连接自动启动守护进程
-- 多个 Claude Code 实例共享连接
+- 多个 Agent 会话共享连接
 - 自动心跳检测和断线重连
 - 空闲 30 分钟自动退出
 
@@ -75,13 +80,13 @@
 
 ```bash
 # 自动模式（推荐）- 智能选择最优方式
-ssh_server_transfer.py source-server /data/backup.tar.gz target-server /backup/
+uv run "<skill-root>/scripts/ssh_server_transfer.py" source-server /data/backup.tar.gz target-server /backup/
 
 # 直连模式 - 大文件推荐（数据不经过本地）
-ssh_server_transfer.py source-server /data/large.iso target-server /data/ --mode direct
+uv run "<skill-root>/scripts/ssh_server_transfer.py" source-server /data/large.iso target-server /data/ --mode direct
 
 # 支持 rsync 增量同步
-ssh_server_transfer.py source-server /data/ target-server /backup/ --use-rsync
+uv run "<skill-root>/scripts/ssh_server_transfer.py" source-server /data/ target-server /backup/ --use-rsync
 ```
 
 **传输模式对比**：
@@ -112,16 +117,16 @@ AI 只需要知道 `internal-server` 别名，底层自动处理多级跳转。
 
 ```bash
 # 列出所有服务器
-ssh_config_manager_v3.py list-servers
+uv run "<skill-root>/scripts/ssh_config_manager_v3.py" list-servers
 
 # 查找服务器
-ssh_config_manager_v3.py find "web"
+uv run "<skill-root>/scripts/ssh_config_manager_v3.py" find "web"
 
 # 创建配置
-ssh_config_manager_v3.py create --alias prod-web-01 --host 192.168.1.100 --user root
+uv run "<skill-root>/scripts/ssh_config_manager_v3.py" create --alias prod-web-01 --host 192.168.1.100 --user root
 
 # 更新配置
-ssh_config_manager_v3.py update prod-web-01 --description "生产环境 Web 服务器"
+uv run "<skill-root>/scripts/ssh_config_manager_v3.py" update prod-web-01 --description "生产环境 Web 服务器"
 ```
 
 **元数据支持**：
@@ -136,64 +141,66 @@ ssh_config_manager_v3.py update prod-web-01 --description "生产环境 Web 服�
 
 ```bash
 # 对所有服务器执行
-ssh_cluster.py "uptime" --parallel
+uv run "<skill-root>/scripts/ssh_cluster.py" "uptime" --parallel
 
 # 按环境过滤
-ssh_cluster.py "systemctl status nginx" --environment production --parallel
+uv run "<skill-root>/scripts/ssh_cluster.py" "systemctl status nginx" --environment production --parallel
 
 # 按标签过滤
-ssh_cluster.py "df -h" --tags "web,nginx" --parallel --max-workers 10
+uv run "<skill-root>/scripts/ssh_cluster.py" "df -h" --tags "web,nginx" --parallel --max-workers 10
 ```
 
 ## 📦 安装
 
 ### 依赖
 
-```bash
-pip install paramiko
-```
+- [uv](https://docs.astral.sh/uv/)
+- OpenSSH 客户端
+
+Python 入口脚本使用 PEP 723 声明 paramiko。通过 `uv run` 执行时，uv 会自动创建隔离环境并缓存依赖，无需手动运行 `pip install`。
 
 ### 配置
 
-1. Codex 用户：将 `ssh-skill` 目录放到 `C:\Users\<用户名>\.agents\skills\ssh-skill\` 或当前 Codex 技能目录。
-2. Claude Code 用户：将 `ssh-skill` 目录放到 `~/.claude/skills/ssh-skill/`。
-3. 配置 SSH 密钥或密码认证。
-4. 开始使用。
+1. 将 `ssh-skill` 放入当前 Agent 支持的 skill 目录。Codex 通常使用 `~/.codex/skills/` 或 `~/.agents/skills/`，Claude Code 使用 `~/.claude/skills/`。
+2. 配置 SSH 密钥或密码认证。
+3. 开始使用。
+
+下方命令中的 `<skill-root>` 表示当前 `SKILL.md` 所在目录。Agent 应从已加载 skill 的来源路径解析它，而不是扫描或硬编码某个平台目录。
 
 ## 🎬 快速开始
 
 ### 执行远程命令
 
 ```bash
-python ~/.claude/skills/ssh-skill/scripts/ssh_execute.py prod-web-01 "systemctl status nginx"
+uv run "<skill-root>/scripts/ssh_execute.py" prod-web-01 "systemctl status nginx"
 ```
 
 ### 上传文件
 
 ```bash
 # 小文件（快速）
-MSYS_NO_PATHCONV=1 python ~/.claude/skills/ssh-skill/scripts/ssh_upload.py prod-web-01 ./app.tar.gz /tmp/
+MSYS_NO_PATHCONV=1 uv run "<skill-root>/scripts/ssh_upload.py" prod-web-01 ./app.tar.gz /tmp/
 
 # 大文件（自动显示进度）
-MSYS_NO_PATHCONV=1 python ~/.claude/skills/ssh-skill/scripts/ssh_upload.py prod-web-01 ./large-file.iso /tmp/
+MSYS_NO_PATHCONV=1 uv run "<skill-root>/scripts/ssh_upload.py" prod-web-01 ./large-file.iso /tmp/
 
 # 断点续传
-MSYS_NO_PATHCONV=1 python ~/.claude/skills/ssh-skill/scripts/ssh_upload.py prod-web-01 ./large-file.iso /tmp/ --resume
+MSYS_NO_PATHCONV=1 uv run "<skill-root>/scripts/ssh_upload.py" prod-web-01 ./large-file.iso /tmp/ --resume
 
 # 递归上传目录
-MSYS_NO_PATHCONV=1 python ~/.claude/skills/ssh-skill/scripts/ssh_upload.py prod-web-01 ./dist/ /var/www/html/ --recursive
+MSYS_NO_PATHCONV=1 uv run "<skill-root>/scripts/ssh_upload.py" prod-web-01 ./dist/ /var/www/html/ --recursive
 ```
 
 ### 下载文件
 
 ```bash
-MSYS_NO_PATHCONV=1 python ~/.claude/skills/ssh-skill/scripts/ssh_download.py prod-web-01 /var/log/app.log ./app.log
+MSYS_NO_PATHCONV=1 uv run "<skill-root>/scripts/ssh_download.py" prod-web-01 /var/log/app.log ./app.log
 ```
 
 ### 服务器间传输
 
 ```bash
-MSYS_NO_PATHCONV=1 python ~/.claude/skills/ssh-skill/scripts/ssh_server_transfer.py source-server /data/backup.tar.gz target-server /backup/
+MSYS_NO_PATHCONV=1 uv run "<skill-root>/scripts/ssh_server_transfer.py" source-server /data/backup.tar.gz target-server /backup/
 ```
 
 ## 🎯 使用场景
@@ -202,17 +209,17 @@ MSYS_NO_PATHCONV=1 python ~/.claude/skills/ssh-skill/scripts/ssh_server_transfer
 
 ```bash
 # 快速检查服务器状态
-ssh_execute.py web-01 "uptime && free -m && df -h"
+uv run "<skill-root>/scripts/ssh_execute.py" web-01 "uptime && free -m && df -h"
 
 # 批量重启服务
-ssh_cluster.py "systemctl restart nginx" --environment production --parallel
+uv run "<skill-root>/scripts/ssh_cluster.py" "systemctl restart nginx" --environment production --parallel
 ```
 
 ### 场景 2：大文件部署
 
 ```bash
 # 上传 500MB 应用包（自动显示进度）
-ssh_upload.py prod-web-01 ./app-v2.0.tar.gz /opt/apps/
+uv run "<skill-root>/scripts/ssh_upload.py" prod-web-01 ./app-v2.0.tar.gz /opt/apps/
 
 # 输出示例：
 # 上传进度: 45.2% (2.1 MB/s) ETA: 102.3s
@@ -222,17 +229,17 @@ ssh_upload.py prod-web-01 ./app-v2.0.tar.gz /opt/apps/
 
 ```bash
 # 服务器间直接传输（不占用本地带宽）
-ssh_server_transfer.py old-server /data/database.sql new-server /data/ --mode direct
+uv run "<skill-root>/scripts/ssh_server_transfer.py" old-server /data/database.sql new-server /data/ --mode direct
 
 # 使用 rsync 增量同步
-ssh_server_transfer.py source /data/ target /backup/ --use-rsync
+uv run "<skill-root>/scripts/ssh_server_transfer.py" source /data/ target /backup/ --use-rsync
 ```
 
 ### 场景 4：跳板机访问
 
 ```bash
 # 通过跳板机访问内网服务器（自动处理）
-ssh_execute.py internal-server "docker ps"
+uv run "<skill-root>/scripts/ssh_execute.py" internal-server "docker ps"
 ```
 
 ## 📈 性能数据
@@ -289,14 +296,14 @@ ssh_execute.py internal-server "docker ps"
 
 ```bash
 # 上传大文件，支持中断后继续
-ssh_upload.py prod-web-01 ./large-file.iso /tmp/ --resume
+uv run "<skill-root>/scripts/ssh_upload.py" prod-web-01 ./large-file.iso /tmp/ --resume
 ```
 
 ### 目录递归传输
 
 ```bash
 # 递归上传整个目录
-ssh_upload.py prod-web-01 ./dist/ /var/www/html/ --recursive
+uv run "<skill-root>/scripts/ssh_upload.py" prod-web-01 ./dist/ /var/www/html/ --recursive
 ```
 
 ### 自动错误恢复
@@ -309,13 +316,13 @@ ssh_upload.py prod-web-01 ./dist/ /var/www/html/ --recursive
 
 ```bash
 # 按环境过滤
-ssh_config_manager_v3.py list-servers --environment production
+uv run "<skill-root>/scripts/ssh_config_manager_v3.py" list-servers --environment production
 
 # 按标签过滤
-ssh_config_manager_v3.py list-servers --tags web,nginx
+uv run "<skill-root>/scripts/ssh_config_manager_v3.py" list-servers --tags web,nginx
 
 # 更新服务器信息
-ssh_config_manager_v3.py update prod-web-01 --description "新描述" --tags tag1,tag2
+uv run "<skill-root>/scripts/ssh_config_manager_v3.py" update prod-web-01 --description "新描述" --tags tag1,tag2
 ```
 
 ## 📚 配置示例
@@ -363,9 +370,9 @@ Host internal-server
     ProxyJump bastion
 ```
 
-## 🎨 与 Codex / Claude Code 集成
+## 🎨 与 AI 编程 Agent 集成
 
-在 Codex 或 Claude Code 中，AI 会根据 `SKILL.md` 的描述自动使用 ssh-skill 处理 SSH 操作：
+在支持 Agent Skills 的 Codex、Claude Code 或其他 Agent 中，AI 会根据 `SKILL.md` 的描述自动使用 ssh-skill 处理 SSH 操作：
 
 ```
 用户：在 prod-web-01 上检查 Nginx 状态
@@ -379,6 +386,10 @@ AI：[自动调用 ssh_server_transfer.py]
 ```
 
 ## 🔄 版本历史
+
+### 开发中
+- 🤖 Agent 中立的 skill 路径解析与说明
+- 📦 使用 uv 和 PEP 723 隔离 Python 依赖
 
 ### v3.3.1 (2026-05-01)
 - 🧩 **Codex 元数据兼容修复**：压缩 `SKILL.md` frontmatter `description`，避免超过 Codex 1024 字符限制导致 skill 加载失败

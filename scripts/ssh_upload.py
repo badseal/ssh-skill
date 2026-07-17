@@ -1,25 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# /// script
+# requires-python = ">=3.8"
+# dependencies = ["paramiko"]
+# ///
 """
 SSH文件上传CLI工具 v3.1
 
 支持通过别名上传文件，SFTP 高级功能：断点续传、目录递归上传、进度显示
 
 用法：
-    python ssh_upload.py <alias> <local_path> <remote_path> [options]
+    uv run ssh_upload.py <alias> <local_path> <remote_path> [options]
 
 示例：
     # 上传单个文件
-    python ssh_upload.py prod-web-01 ./app.tar.gz /tmp/
+    uv run ssh_upload.py prod-web-01 ./app.tar.gz /tmp/
 
     # 断点续传（大文件推荐）
-    python ssh_upload.py prod-web-01 ./large-file.iso /tmp/ --resume
+    uv run ssh_upload.py prod-web-01 ./large-file.iso /tmp/ --resume
 
     # 上传整个目录
-    python ssh_upload.py prod-web-01 ./dist/ /var/www/html/ --recursive
+    uv run ssh_upload.py prod-web-01 ./dist/ /var/www/html/ --recursive
 
     # 上传目录 + 断点续传
-    python ssh_upload.py prod-web-01 ./data/ /opt/data/ --recursive --resume
+    uv run ssh_upload.py prod-web-01 ./data/ /opt/data/ --recursive --resume
 """
 
 import sys

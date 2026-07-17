@@ -1,25 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# /// script
+# requires-python = ">=3.8"
+# dependencies = ["paramiko"]
+# ///
 """
 SSH批量操作CLI工具 v3.0
 
 从 SSH config 读取服务器列表，支持按环境/别名过滤
 
 用法：
-    python ssh_cluster.py <command> [--parallel] [--hosts HOSTS] [--environment ENV]
+    uv run ssh_cluster.py <command> [--parallel] [--hosts HOSTS] [--environment ENV]
 
 示例：
     # 对所有服务器执行命令
-    python ssh_cluster.py "uptime" --parallel
+    uv run ssh_cluster.py "uptime" --parallel
 
     # 对指定别名列表执行
-    python ssh_cluster.py "df -h" --hosts "DEV-002,DEV-003" --parallel
+    uv run ssh_cluster.py "df -h" --hosts "DEV-002,DEV-003" --parallel
 
     # 按环境过滤
-    python ssh_cluster.py "uptime" --environment production --parallel
+    uv run ssh_cluster.py "uptime" --environment production --parallel
 
     # 健康检查
-    python ssh_cluster.py "systemctl status nginx" --parallel --health-check
+    uv run ssh_cluster.py "systemctl status nginx" --parallel --health-check
 """
 
 import sys

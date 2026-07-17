@@ -2,12 +2,17 @@
 
 [中文](README.md) | **English**
 
-> Enterprise-grade SSH management tool for Codex / Claude Code, making remote server operations as simple and efficient as local ones
+> Enterprise-grade SSH management for AI coding agents that support Agent Skills, making remote operations as simple and efficient as local ones
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## 📢 Recent Updates
+
+### In Development - Agent-Neutral Integration and Isolated uv Runtime
+
+- 🤖 **Agent-neutral integration**: Resolves scripts relative to the active `SKILL.md` instead of a vendor-specific install directory
+- 📦 **Isolated uv dependencies**: Entry scripts declare paramiko with PEP 723 and do not modify the system Python environment
 
 ### v3.3.1 - Codex Metadata Compatibility Fix (2026-05-01)
 
@@ -33,7 +38,7 @@
 | **Daemon Mode** | **~0.12s** | **~1.2s** | **~3.6s** | **🔥 3.75x** |
 
 - Auto-start daemon on first connection
-- Multiple Claude Code instances share connections
+- Multiple Agent sessions share connections
 - Automatic heartbeat detection and reconnection
 - Auto-exit after 30 minutes idle
 
@@ -75,13 +80,13 @@ File size > 80MB  →  Paramiko SFTP (real-time progress)
 
 ```bash
 # Auto mode (recommended) - intelligently selects optimal method
-ssh_server_transfer.py source-server /data/backup.tar.gz target-server /backup/
+uv run "<skill-root>/scripts/ssh_server_transfer.py" source-server /data/backup.tar.gz target-server /backup/
 
 # Direct mode - recommended for large files (data doesn't go through local)
-ssh_server_transfer.py source-server /data/large.iso target-server /data/ --mode direct
+uv run "<skill-root>/scripts/ssh_server_transfer.py" source-server /data/large.iso target-server /data/ --mode direct
 
 # Support rsync incremental sync
-ssh_server_transfer.py source-server /data/ target-server /backup/ --use-rsync
+uv run "<skill-root>/scripts/ssh_server_transfer.py" source-server /data/ target-server /backup/ --use-rsync
 ```
 
 **Transfer Mode Comparison**:
@@ -112,16 +117,16 @@ AI only needs to know the `internal-server` alias, multi-level jumping is handle
 
 ```bash
 # List all servers
-ssh_config_manager_v3.py list-servers
+uv run "<skill-root>/scripts/ssh_config_manager_v3.py" list-servers
 
 # Find servers
-ssh_config_manager_v3.py find "web"
+uv run "<skill-root>/scripts/ssh_config_manager_v3.py" find "web"
 
 # Create configuration
-ssh_config_manager_v3.py create --alias prod-web-01 --host 192.168.1.100 --user root
+uv run "<skill-root>/scripts/ssh_config_manager_v3.py" create --alias prod-web-01 --host 192.168.1.100 --user root
 
 # Update configuration
-ssh_config_manager_v3.py update prod-web-01 --description "Production Web Server"
+uv run "<skill-root>/scripts/ssh_config_manager_v3.py" update prod-web-01 --description "Production Web Server"
 ```
 
 **Metadata Support**:
@@ -136,64 +141,66 @@ ssh_config_manager_v3.py update prod-web-01 --description "Production Web Server
 
 ```bash
 # Execute on all servers
-ssh_cluster.py "uptime" --parallel
+uv run "<skill-root>/scripts/ssh_cluster.py" "uptime" --parallel
 
 # Filter by environment
-ssh_cluster.py "systemctl status nginx" --environment production --parallel
+uv run "<skill-root>/scripts/ssh_cluster.py" "systemctl status nginx" --environment production --parallel
 
 # Filter by tags
-ssh_cluster.py "df -h" --tags "web,nginx" --parallel --max-workers 10
+uv run "<skill-root>/scripts/ssh_cluster.py" "df -h" --tags "web,nginx" --parallel --max-workers 10
 ```
 
 ## 📦 Installation
 
 ### Dependencies
 
-```bash
-pip install paramiko
-```
+- [uv](https://docs.astral.sh/uv/)
+- OpenSSH client
+
+Python entry scripts declare paramiko through PEP 723. When invoked with `uv run`, uv creates an isolated environment and caches dependencies automatically; no manual `pip install` is required.
 
 ### Configuration
 
-1. For Codex: place the `ssh-skill` directory under `C:\Users\<username>\.agents\skills\ssh-skill\` or your active Codex skills directory.
-2. For Claude Code: place the `ssh-skill` directory under `~/.claude/skills/ssh-skill/`.
-3. Configure SSH key or password authentication.
-4. Start using.
+1. Place `ssh-skill` in the active Agent's skill directory. Codex commonly uses `~/.codex/skills/` or `~/.agents/skills/`; Claude Code uses `~/.claude/skills/`.
+2. Configure SSH key or password authentication.
+3. Start using.
+
+In the commands below, `<skill-root>` means the directory containing the active `SKILL.md`. The Agent should resolve it from the loaded skill source path instead of scanning or hard-coding a vendor directory.
 
 ## 🎬 Quick Start
 
 ### Execute Remote Commands
 
 ```bash
-python ~/.claude/skills/ssh-skill/scripts/ssh_execute.py prod-web-01 "systemctl status nginx"
+uv run "<skill-root>/scripts/ssh_execute.py" prod-web-01 "systemctl status nginx"
 ```
 
 ### Upload Files
 
 ```bash
 # Small files (fast)
-MSYS_NO_PATHCONV=1 python ~/.claude/skills/ssh-skill/scripts/ssh_upload.py prod-web-01 ./app.tar.gz /tmp/
+MSYS_NO_PATHCONV=1 uv run "<skill-root>/scripts/ssh_upload.py" prod-web-01 ./app.tar.gz /tmp/
 
 # Large files (auto progress display)
-MSYS_NO_PATHCONV=1 python ~/.claude/skills/ssh-skill/scripts/ssh_upload.py prod-web-01 ./large-file.iso /tmp/
+MSYS_NO_PATHCONV=1 uv run "<skill-root>/scripts/ssh_upload.py" prod-web-01 ./large-file.iso /tmp/
 
 # Resume support
-MSYS_NO_PATHCONV=1 python ~/.claude/skills/ssh-skill/scripts/ssh_upload.py prod-web-01 ./large-file.iso /tmp/ --resume
+MSYS_NO_PATHCONV=1 uv run "<skill-root>/scripts/ssh_upload.py" prod-web-01 ./large-file.iso /tmp/ --resume
 
 # Recursive directory upload
-MSYS_NO_PATHCONV=1 python ~/.claude/skills/ssh-skill/scripts/ssh_upload.py prod-web-01 ./dist/ /var/www/html/ --recursive
+MSYS_NO_PATHCONV=1 uv run "<skill-root>/scripts/ssh_upload.py" prod-web-01 ./dist/ /var/www/html/ --recursive
 ```
 
 ### Download Files
 
 ```bash
-MSYS_NO_PATHCONV=1 python ~/.claude/skills/ssh-skill/scripts/ssh_download.py prod-web-01 /var/log/app.log ./app.log
+MSYS_NO_PATHCONV=1 uv run "<skill-root>/scripts/ssh_download.py" prod-web-01 /var/log/app.log ./app.log
 ```
 
 ### Server-to-Server Transfer
 
 ```bash
-MSYS_NO_PATHCONV=1 python ~/.claude/skills/ssh-skill/scripts/ssh_server_transfer.py source-server /data/backup.tar.gz target-server /backup/
+MSYS_NO_PATHCONV=1 uv run "<skill-root>/scripts/ssh_server_transfer.py" source-server /data/backup.tar.gz target-server /backup/
 ```
 
 ## 🎯 Use Cases
@@ -202,17 +209,17 @@ MSYS_NO_PATHCONV=1 python ~/.claude/skills/ssh-skill/scripts/ssh_server_transfer
 
 ```bash
 # Quick server status check
-ssh_execute.py web-01 "uptime && free -m && df -h"
+uv run "<skill-root>/scripts/ssh_execute.py" web-01 "uptime && free -m && df -h"
 
 # Batch service restart
-ssh_cluster.py "systemctl restart nginx" --environment production --parallel
+uv run "<skill-root>/scripts/ssh_cluster.py" "systemctl restart nginx" --environment production --parallel
 ```
 
 ### Scenario 2: Large File Deployment
 
 ```bash
 # Upload 500MB application package (auto progress display)
-ssh_upload.py prod-web-01 ./app-v2.0.tar.gz /opt/apps/
+uv run "<skill-root>/scripts/ssh_upload.py" prod-web-01 ./app-v2.0.tar.gz /opt/apps/
 
 # Output example:
 # Upload progress: 45.2% (2.1 MB/s) ETA: 102.3s
@@ -222,17 +229,17 @@ ssh_upload.py prod-web-01 ./app-v2.0.tar.gz /opt/apps/
 
 ```bash
 # Server-to-server direct transfer (no local bandwidth)
-ssh_server_transfer.py old-server /data/database.sql new-server /data/ --mode direct
+uv run "<skill-root>/scripts/ssh_server_transfer.py" old-server /data/database.sql new-server /data/ --mode direct
 
 # Use rsync for incremental sync
-ssh_server_transfer.py source /data/ target /backup/ --use-rsync
+uv run "<skill-root>/scripts/ssh_server_transfer.py" source /data/ target /backup/ --use-rsync
 ```
 
 ### Scenario 4: Jump Host Access
 
 ```bash
 # Access internal server through jump host (auto-handled)
-ssh_execute.py internal-server "docker ps"
+uv run "<skill-root>/scripts/ssh_execute.py" internal-server "docker ps"
 ```
 
 ## 📈 Performance Data
@@ -289,14 +296,14 @@ Daemon Mode:
 
 ```bash
 # Upload large file, support resume after interruption
-ssh_upload.py prod-web-01 ./large-file.iso /tmp/ --resume
+uv run "<skill-root>/scripts/ssh_upload.py" prod-web-01 ./large-file.iso /tmp/ --resume
 ```
 
 ### Recursive Directory Transfer
 
 ```bash
 # Recursively upload entire directory
-ssh_upload.py prod-web-01 ./dist/ /var/www/html/ --recursive
+uv run "<skill-root>/scripts/ssh_upload.py" prod-web-01 ./dist/ /var/www/html/ --recursive
 ```
 
 ### Auto Error Recovery
@@ -309,13 +316,13 @@ ssh_upload.py prod-web-01 ./dist/ /var/www/html/ --recursive
 
 ```bash
 # Filter by environment
-ssh_config_manager_v3.py list-servers --environment production
+uv run "<skill-root>/scripts/ssh_config_manager_v3.py" list-servers --environment production
 
 # Filter by tags
-ssh_config_manager_v3.py list-servers --tags web,nginx
+uv run "<skill-root>/scripts/ssh_config_manager_v3.py" list-servers --tags web,nginx
 
 # Update server info
-ssh_config_manager_v3.py update prod-web-01 --description "New description" --tags tag1,tag2
+uv run "<skill-root>/scripts/ssh_config_manager_v3.py" update prod-web-01 --description "New description" --tags tag1,tag2
 ```
 
 ## 📚 Configuration Examples
@@ -363,9 +370,9 @@ Host internal-server
     ProxyJump bastion
 ```
 
-## 🎨 Integration with Codex / Claude Code
+## 🎨 Integration with AI Coding Agents
 
-In Codex or Claude Code, AI uses the `SKILL.md` description to automatically select ssh-skill for SSH operations:
+In Codex, Claude Code, or another Agent that supports Agent Skills, the AI uses the `SKILL.md` description to automatically select ssh-skill for SSH operations:
 
 ```
 User: Check Nginx status on prod-web-01
@@ -379,6 +386,10 @@ AI: [Auto-calls ssh_server_transfer.py]
 ```
 
 ## 🔄 Version History
+
+### In Development
+- 🤖 Agent-neutral skill path resolution and instructions
+- 📦 Isolated Python dependencies through uv and PEP 723
 
 ### v3.3.1 (2026-05-01)
 - 🧩 **Codex metadata compatibility fix**: Shortened the `SKILL.md` frontmatter `description` to avoid Codex skill loading failures caused by the 1024-character description limit

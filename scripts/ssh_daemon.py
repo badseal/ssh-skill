@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# /// script
+# requires-python = ">=3.8"
+# dependencies = ["paramiko"]
+# ///
 """
 SSH 长连接守护进程 v3.0
 
@@ -9,14 +13,14 @@ SSH 长连接守护进程 v3.0
 v3.0 变更：使用别名（alias）标识服务器，从 ~/.ssh/config 读取配置
 
 用法：
-    python ssh_daemon.py start <alias>
-    python ssh_daemon.py status <alias>
-    python ssh_daemon.py stop <alias>
+    uv run ssh_daemon.py start <alias>
+    uv run ssh_daemon.py status <alias>
+    uv run ssh_daemon.py stop <alias>
 
 示例：
-    python ssh_daemon.py start DEV-002
-    python ssh_daemon.py status DEV-002
-    python ssh_daemon.py stop DEV-002
+    uv run ssh_daemon.py start DEV-002
+    uv run ssh_daemon.py status DEV-002
+    uv run ssh_daemon.py stop DEV-002
 """
 
 import sys

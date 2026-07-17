@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# /// script
+# requires-python = ">=3.8"
+# dependencies = ["paramiko"]
+# ///
 """
 SSH Config 管理工具 v3.1
 
@@ -26,16 +30,16 @@ Host alias
 
 用法：
     # 列出所有服务器
-    python ssh_config_manager_v3.py list-servers
+    uv run ssh_config_manager_v3.py list-servers
 
     # 按环境过滤
-    python ssh_config_manager_v3.py list-servers --environment production
+    uv run ssh_config_manager_v3.py list-servers --environment production
 
     # 查找服务器
-    python ssh_config_manager_v3.py find "web"
+    uv run ssh_config_manager_v3.py find "web"
 
     # 创建配置
-    python ssh_config_manager_v3.py create \\
+    uv run ssh_config_manager_v3.py create \\
       --alias prod-web-01 \\
       --host 192.168.1.100 \\
       --user root \\
@@ -46,10 +50,10 @@ Host alias
       --location "阿里云华北"
 
     # 删除配置
-    python ssh_config_manager_v3.py delete prod-web-01
+    uv run ssh_config_manager_v3.py delete prod-web-01
 
     # 导出配置
-    python ssh_config_manager_v3.py export --output backup.json
+    uv run ssh_config_manager_v3.py export --output backup.json
 """
 
 import sys
@@ -70,7 +74,7 @@ try:
     import paramiko
 except ImportError:
     print("错误: 需要安装 paramiko 库", file=sys.stderr)
-    print("请运行: pip install paramiko", file=sys.stderr)
+    print("请使用 uv run 执行本脚本，uv 会自动提供 paramiko 依赖", file=sys.stderr)
     sys.exit(1)
 
 
