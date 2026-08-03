@@ -71,7 +71,7 @@ def make_progress_callback(
     return callback
 
 
-def main():
+def _legacy_main(argv=None):
     parser = argparse.ArgumentParser(description='SSH file upload tool v3.1')
     parser.add_argument('alias', help='SSH host alias from ~/.ssh/config')
     parser.add_argument('local_path', help='Local file or directory path')
@@ -87,7 +87,7 @@ def main():
                                 help='Disable progress output')
     parser.set_defaults(progress=None)
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     remote_path = _fix_remote_path(args.remote_path)
 
     try:
@@ -205,5 +205,14 @@ def main():
         sys.exit(1)
 
 
+def main(argv=None):
+    from ssh_skill import delegate_legacy_entrypoint
+
+    arguments = sys.argv[1:] if argv is None else list(argv)
+    return delegate_legacy_entrypoint(
+        'upload', arguments, legacy_main=_legacy_main
+    )
+
+
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

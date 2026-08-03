@@ -567,7 +567,7 @@ def cmd_status(alias: str):
         print(json.dumps({'status': 'unreachable', 'error': str(e)}, ensure_ascii=False))
 
 
-def main():
+def _legacy_main(argv=None):
     parser = argparse.ArgumentParser(description='SSH 长连接守护进程 v3.0')
     subparsers = parser.add_subparsers(dest='command', help='操作命令')
 
@@ -585,7 +585,7 @@ def main():
     p_status = subparsers.add_parser('status', help='查询守护进程状态')
     p_status.add_argument('alias', help='SSH host 别名')
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.command == 'start':
         cmd_start(args.alias, args.idle_timeout)
@@ -598,5 +598,14 @@ def main():
         sys.exit(1)
 
 
+def main(argv=None):
+    from ssh_skill import delegate_legacy_entrypoint
+
+    arguments = sys.argv[1:] if argv is None else list(argv)
+    return delegate_legacy_entrypoint(
+        'daemon', arguments, legacy_main=_legacy_main
+    )
+
+
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

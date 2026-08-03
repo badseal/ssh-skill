@@ -30,7 +30,17 @@ _script_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_script_dir, 'lib'))
 
 from daemon_protocol import PROTOCOL_VERSION, FrameSendError, recv_frame, send_frame
-from result_protocol import error_result
+from result_protocol import error_result, exit_code_for, success_result, write_result
+from security import redact_sensitive
+
+
+class CLIUsageError(ValueError):
+    pass
+
+
+class JSONArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise CLIUsageError(message)
 
 
 @dataclass(frozen=True)
@@ -248,77 +258,111 @@ def direct_execute(alias, command, timeout):
     }
 
 
-def main():
-    parser = argparse.ArgumentParser(description='SSH command execution tool v3.0')
+def _normalize_exec_result(result, alias, command):
+    if result.get('schema_version') == '1.0':
+        return result
+    data = {
+        'alias': alias,
+        'command': command,
+        'exit_code': result.get('exit_code', -1),
+        'stdout': result.get('stdout', ''),
+        'stderr': result.get('stderr', ''),
+    }
+    for key in ('method', 'fallback_reason', 'output', 'warnings'):
+        if key in result:
+            data[key] = result[key]
+    if result.get('success'):
+        return success_result('exec', data)
+    return error_result(
+        'exec',
+        code='remote_command_failed',
+        message=result.get('stderr') or 'remote command failed',
+        data=data,
+    )
+
+
+def run_exec(alias, command, *, timeout=30, no_daemon=False):
+    result = None
+    from config_v3 import SSHConfigLoaderV3
+
+    loader = SSHConfigLoaderV3()
+    params = loader.get_connection_params(alias)
+    has_password = params.get('password') is not None
+    use_daemon = has_password and not no_daemon
+
+    if use_daemon:
+        attempt = try_daemon_execute(alias, command, timeout)
+        if not may_fallback(attempt):
+            result = daemon_attempt_to_result(attempt)
+        elif start_daemon_background(alias):
+            attempt = try_daemon_execute(alias, command, timeout)
+            if not may_fallback(attempt):
+                result = daemon_attempt_to_result(attempt)
+
+    if result is None:
+        result = direct_execute(alias, command, timeout)
+    return _normalize_exec_result(result, alias, command)
+
+
+def _legacy_exec_result(result):
+    data = result.get('data') or {}
+    error = result.get('error') or {}
+    return {
+        'success': bool(result.get('success')),
+        'exit_code': data.get('exit_code', -1),
+        'stdout': data.get('stdout', ''),
+        'stderr': data.get('stderr') or error.get('message', ''),
+        'error_code': error.get('code'),
+        'outcome': error.get('outcome'),
+    }
+
+
+def main(argv=None, *, stdout=sys.stdout, executor=None):
+    parser = JSONArgumentParser(description='SSH command execution tool v3.0')
     parser.add_argument('alias', help='SSH host alias from ~/.ssh/config')
     parser.add_argument('command', help='Command to execute')
     parser.add_argument('--timeout', type=int, help='Timeout in seconds')
     parser.add_argument('--no-daemon', action='store_true',
                         help='Disable daemon mode, use direct SSH connection')
-
-    args = parser.parse_args()
-    timeout = args.timeout or 30
+    parser.add_argument('--legacy-json', action='store_true',
+                        help='Emit the pre-v4 result shape')
 
     try:
-        result = None
+        args = parser.parse_args(argv)
+    except CLIUsageError as exc:
+        result = error_result(
+            'exec', code='invalid_arguments', message=str(exc), retryable=False
+        )
+        write_result(redact_sensitive(result), stream=stdout)
+        return exit_code_for(result)
+    timeout = args.timeout or 30
+    executor = executor or (
+        lambda alias, command, timeout, no_daemon: run_exec(
+            alias, command, timeout=timeout, no_daemon=no_daemon
+        )
+    )
 
-        # 智能判断是否使用守护进程
-        # 守护进程只对密码认证有意义（Paramiko），密钥认证使用原生 SSH 不需要守护进程
-        from config_v3 import SSHConfigLoaderV3
-        loader = SSHConfigLoaderV3()
-        params = loader.get_connection_params(args.alias)
-
-        has_key = params.get('key_file') is not None
-        has_password = params.get('password') is not None
-        use_daemon = has_password and not args.no_daemon  # 只有密码认证才使用守护进程
-
-        if use_daemon:
-            # 密码认证：尝试通过守护进程执行
-            attempt = try_daemon_execute(args.alias, args.command, timeout)
-            if attempt.disposition == 'completed':
-                result = daemon_attempt_to_result(attempt)
-            elif attempt.disposition == 'outcome_unknown':
-                result = daemon_attempt_to_result(attempt)
-
-            # 守护进程不可用，尝试后台启动
-            if result is None and may_fallback(attempt):
-                if start_daemon_background(args.alias):
-                    attempt = try_daemon_execute(args.alias, args.command, timeout)
-                    if not may_fallback(attempt):
-                        result = daemon_attempt_to_result(attempt)
-
-        # 仍然没有结果，使用直连（密钥认证会使用 NativeSSHClient）
-        if result is None:
-            result = direct_execute(args.alias, args.command, timeout)
-
-        print(json.dumps(result, ensure_ascii=True, indent=2))
-        sys.exit(0 if result.get('success') else 1)
+    try:
+        result = executor(args.alias, args.command, timeout, args.no_daemon)
 
     except FileNotFoundError as e:
-        print(json.dumps({
-            'success': False,
-            'exit_code': -1,
-            'stdout': '',
-            'stderr': f'Config not found: {e}'
-        }, ensure_ascii=True, indent=2), file=sys.stderr)
-        sys.exit(1)
+        result = error_result(
+            'exec', code='config_not_found', message=f'Config not found: {e}'
+        )
     except ValueError as e:
-        print(json.dumps({
-            'success': False,
-            'exit_code': -1,
-            'stdout': '',
-            'stderr': f'Invalid alias: {e}'
-        }, ensure_ascii=True, indent=2), file=sys.stderr)
-        sys.exit(1)
+        result = error_result('exec', code='invalid_alias', message=f'Invalid alias: {e}')
     except Exception as e:
-        print(json.dumps({
-            'success': False,
-            'exit_code': -1,
-            'stdout': '',
-            'stderr': f'Execution error: {e}'
-        }, ensure_ascii=True, indent=2), file=sys.stderr)
-        sys.exit(1)
+        result = error_result(
+            'exec', code='execution_error', message=f'{type(e).__name__}: execution failed'
+        )
+
+    result = redact_sensitive(result)
+    if args.legacy_json:
+        stdout.write(json.dumps(_legacy_exec_result(result), ensure_ascii=True) + '\n')
+    else:
+        write_result(result, stream=stdout)
+    return exit_code_for(result)
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

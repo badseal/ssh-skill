@@ -1081,7 +1081,7 @@ def cmd_export(args):
         sys.exit(1)
 
 
-def main():
+def _legacy_main(argv=None):
     parser = argparse.ArgumentParser(
         description='SSH Config 管理工具 v3.1（基于注释元数据）',
         formatter_class=argparse.RawDescriptionHelpFormatter
@@ -1136,7 +1136,7 @@ def main():
     export_parser = subparsers.add_parser('export', help='导出配置')
     export_parser.add_argument('--output', help='输出文件路径')
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if not args.command:
         parser.print_help()
@@ -1157,5 +1157,14 @@ def main():
         cmd_export(args)
 
 
+def main(argv=None):
+    from ssh_skill import delegate_legacy_entrypoint
+
+    arguments = sys.argv[1:] if argv is None else list(argv)
+    return delegate_legacy_entrypoint(
+        'config', arguments, legacy_main=_legacy_main
+    )
+
+
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

@@ -672,7 +672,7 @@ def server_transfer(source_alias, source_path, dest_alias, dest_path,
             }
 
 
-def main():
+def _legacy_main(argv=None):
     parser = argparse.ArgumentParser(
         description='SSH 服务器间文件传输工具 v1.0'
     )
@@ -698,7 +698,7 @@ def main():
     parser.add_argument('--timeout', type=int, default=300,
                         help='超时时间（秒）(默认: 300)')
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # 修复 MSYS 路径转换
     source_path = _fix_remote_path(args.source_path)
@@ -744,5 +744,14 @@ def main():
         sys.exit(1)
 
 
+def main(argv=None):
+    from ssh_skill import delegate_legacy_entrypoint
+
+    arguments = sys.argv[1:] if argv is None else list(argv)
+    return delegate_legacy_entrypoint(
+        'transfer', arguments, legacy_main=_legacy_main
+    )
+
+
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

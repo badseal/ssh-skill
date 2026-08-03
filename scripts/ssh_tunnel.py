@@ -756,7 +756,7 @@ def cmd_stop_all(args):
     return 0
 
 
-def main():
+def _legacy_main(argv=None):
     parser = argparse.ArgumentParser(
         description='SSH Tunnel 守护进程管理工具',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -799,7 +799,7 @@ def main():
     parser_daemon.add_argument('remote_port')
     parser_daemon.set_defaults(func=cmd_daemon)
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if not args.command:
         parser.print_help()
@@ -808,6 +808,15 @@ def main():
     return args.func(args)
 
 
+def main(argv=None):
+    from ssh_skill import delegate_legacy_entrypoint
+
+    arguments = sys.argv[1:] if argv is None else list(argv)
+    return delegate_legacy_entrypoint(
+        'tunnel', arguments, legacy_main=_legacy_main
+    )
+
+
 if __name__ == '__main__':
-    sys.exit(main())
+    raise SystemExit(main())
 
