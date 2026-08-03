@@ -61,6 +61,11 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_script_dir, 'lib'))
+
+from security import redact_sensitive
+
 # 修复 Windows 终端 UTF-8 输出
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -717,13 +722,16 @@ class SSHConfigManager:
         export_data = {
             "version": "3.1",
             "exported_at": datetime.now().isoformat(),
-            "hosts": []
+            "hosts": [],
+            "warnings": [],
         }
 
         hosts_with_metadata = self.read_config_with_metadata()
 
         for alias, metadata, _, _ in hosts_with_metadata:
             config = self.get_host_config(alias)
+            if metadata.get('password'):
+                export_data['warnings'].append('deprecated_plaintext_password')
 
             host_data = {
                 "alias": alias,
@@ -732,11 +740,12 @@ class SSHConfigManager:
                 "port": config.get('port', 22),
                 "identity_file": config.get('identityfile', [None])[0] if config.get('identityfile') else None,
                 "proxy_jump": config.get('proxyjump'),
-                "metadata": metadata
+                "metadata": redact_sensitive(metadata)
             }
 
             export_data['hosts'].append(host_data)
 
+        export_data['warnings'] = sorted(set(export_data['warnings']))
         return export_data
 
 
@@ -786,10 +795,13 @@ def cmd_list_servers(args):
             return
 
         result_list = []
+        warnings = []
         for alias, config, meta in servers:
             # 补充密码信息（从 config_v3 加载，注释元数据中的 password 字段）
             if 'password' not in meta:
                 meta['password'] = _load_password_metadata(manager, alias)
+            if meta.get('password'):
+                warnings.append('deprecated_plaintext_password')
 
             result_list.append({
                 'alias': alias,
@@ -805,7 +817,8 @@ def cmd_list_servers(args):
         print(json.dumps({
             'success': True,
             'count': len(result_list),
-            'servers': result_list
+            'servers': result_list,
+            'warnings': sorted(set(warnings)),
         }, ensure_ascii=False, indent=2))
 
     except Exception as e:
@@ -859,6 +872,16 @@ def cmd_find(args):
 
 def cmd_create(args):
     """创建服务器配置"""
+    if getattr(args, 'password', None) is not None:
+        print(json.dumps({
+            'success': False,
+            'error': {
+                'code': 'plaintext_password_write_disabled',
+                'message': '不再允许将新密码写入 SSH config，请改用密钥或系统凭据存储',
+            },
+        }, ensure_ascii=False), file=sys.stderr)
+        raise SystemExit(1)
+
     try:
         manager = SSHConfigManager()
 
@@ -899,6 +922,16 @@ def cmd_create(args):
 
 def cmd_update(args):
     """更新服务器配置"""
+    if getattr(args, 'password', None) is not None:
+        print(json.dumps({
+            'success': False,
+            'error': {
+                'code': 'plaintext_password_write_disabled',
+                'message': '不再允许将新密码写入 SSH config，请改用密钥或系统凭据存储',
+            },
+        }, ensure_ascii=False), file=sys.stderr)
+        raise SystemExit(1)
+
     try:
         manager = SSHConfigManager()
 
@@ -1024,6 +1057,7 @@ def main():
     create_parser.add_argument('--host', required=True, help='主机地址')
     create_parser.add_argument('--user', required=True, help='用户名')
     create_parser.add_argument('--key', help='密钥文件路径')
+    create_parser.add_argument('--password', help='已禁用：不得写入明文密码')
     create_parser.add_argument('--port', type=int, default=22, help='端口号')
     create_parser.add_argument('--jump', help='跳板机别名')
     create_parser.add_argument('--environment', default='development', help='环境类型')
@@ -1037,6 +1071,7 @@ def main():
     update_parser.add_argument('--host', help='主机地址')
     update_parser.add_argument('--user', help='用户名')
     update_parser.add_argument('--key', help='密钥文件路径')
+    update_parser.add_argument('--password', help='已禁用：不得写入明文密码')
     update_parser.add_argument('--port', type=int, help='端口号')
     update_parser.add_argument('--jump', help='跳板机别名')
     update_parser.add_argument('--environment', help='环境类型')

@@ -234,11 +234,6 @@ def generate_updated_comments(alias, metadata):
     location = metadata.get('location', '')
     comments.append(f"# location: {location}\n")
 
-    # 密码（如果有）
-    password = metadata.get('password', '')
-    if password:
-        comments.append(f"# password: {password}\n")
-
     # 时间
     comments.append(f"# created_at: {now}\n")
     comments.append(f"# updated_at: {now}\n")
@@ -314,7 +309,7 @@ def fix_ssh_config(config_path, json_dir, output_path=None):
 
             if metadata.get('password'):
                 password_count += 1
-                print(f"  更新 {alias}（包含密码）")
+                print(f"  更新 {alias}（已跳过旧明文密码）")
             else:
                 print(f"  更新 {alias}")
         else:
@@ -341,7 +336,7 @@ def fix_ssh_config(config_path, json_dir, output_path=None):
     print(f"\n完成:")
     print(f"  更新元数据: {updated_count} 个")
     print(f"  标准化路径: {normalized_count} 个")
-    print(f"  添加密码: {password_count} 个")
+    print(f"  跳过旧明文密码: {password_count} 个")
     print(f"  输出: {output_path}")
 
 

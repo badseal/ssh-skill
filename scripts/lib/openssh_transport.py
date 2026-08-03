@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, BinaryIO, Callable
 
 from output_limits import OutputLimits, collect_text
+from security import resolve_host_key_policy
 
 
 @dataclass(frozen=True)
@@ -30,12 +31,14 @@ class TransportResult:
     stderr: str
     exit_code: int
     output: dict[str, Any] = field(default_factory=dict)
+    warnings: tuple[str, ...] = ()
 
     @classmethod
     def from_completed_process(
         cls,
         completed: subprocess.CompletedProcess[Any],
         limits: OutputLimits | None = None,
+        warnings: tuple[str, ...] = (),
     ) -> "TransportResult":
         stdout = collect_text(_decode(completed.stdout), limits)
         stderr = collect_text(_decode(completed.stderr), limits)
@@ -45,6 +48,7 @@ class TransportResult:
             stderr=stderr.text,
             exit_code=completed.returncode,
             output={"stdout": stdout.to_meta(), "stderr": stderr.to_meta()},
+            warnings=warnings,
         )
 
 
@@ -57,7 +61,14 @@ def _decode(value: bytes | str | None) -> str:
 
 
 def build_ssh_argv(options: OpenSSHOptions, target: str, command: str | None = None) -> list[str]:
-    strict = "no" if options.unsafe_disable_host_key_checking else options.strict_host_key_checking
+    policy = resolve_host_key_policy(
+        unsafe_disable=options.unsafe_disable_host_key_checking
+    )
+    strict = (
+        policy.strict_host_key_checking
+        if options.unsafe_disable_host_key_checking
+        else options.strict_host_key_checking
+    )
     argv = [options.executable]
     if options.config_path:
         argv.extend(["-F", options.config_path])
@@ -90,6 +101,9 @@ def run_openssh(
     limits: OutputLimits | None = None,
 ) -> TransportResult:
     argv = build_ssh_argv(options, target, command)
+    policy = resolve_host_key_policy(
+        unsafe_disable=options.unsafe_disable_host_key_checking
+    )
     try:
         completed = runner(
             argv,
@@ -100,10 +114,24 @@ def run_openssh(
             shell=False,
         )
     except subprocess.TimeoutExpired:
-        return TransportResult(False, "", f"command timed out after {timeout} seconds", -1)
+        return TransportResult(
+            False,
+            "",
+            f"command timed out after {timeout} seconds",
+            -1,
+            warnings=policy.warnings,
+        )
     except OSError as exc:
-        return TransportResult(False, "", f"OpenSSH execution failed: {exc}", -1)
-    return TransportResult.from_completed_process(completed, limits=limits)
+        return TransportResult(
+            False,
+            "",
+            f"OpenSSH execution failed: {exc}",
+            -1,
+            warnings=policy.warnings,
+        )
+    return TransportResult.from_completed_process(
+        completed, limits=limits, warnings=policy.warnings
+    )
 
 
 def resolve_command_input(

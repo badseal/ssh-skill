@@ -99,8 +99,7 @@ class NativeSSHClient:
         args = [
             "ssh",
             "-p", str(self.port),
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "StrictHostKeyChecking=accept-new",
             "-o", f"ConnectTimeout={self.timeout}",
         ]
 
@@ -214,8 +213,7 @@ class NativeSSHClient:
 
             # 基本参数
             args.extend(["-P", str(self.port)])
-            args.extend(["-o", "StrictHostKeyChecking=no"])
-            args.extend(["-o", "UserKnownHostsFile=/dev/null"])
+            args.extend(["-o", "StrictHostKeyChecking=accept-new"])
 
             # 密钥文件
             if self.key_file:
@@ -295,8 +293,7 @@ class NativeSSHClient:
 
             # 基本参数
             args.extend(["-P", str(self.port)])
-            args.extend(["-o", "StrictHostKeyChecking=no"])
-            args.extend(["-o", "UserKnownHostsFile=/dev/null"])
+            args.extend(["-o", "StrictHostKeyChecking=accept-new"])
 
             # 密钥文件
             if self.key_file:

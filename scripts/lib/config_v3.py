@@ -111,7 +111,8 @@ class SSHConfigLoaderV3:
             'environment': 'unknown',
             'tags': [],
             'location': '',
-            'password': ''
+            'password': '',
+            'warnings': [],
         }
 
         # 读取 config 文件，查找该 Host 前的注释
@@ -177,6 +178,9 @@ class SSHConfigLoaderV3:
                 elif key == 'password':
                     metadata['password'] = value
 
+        if metadata.get('password'):
+            metadata['warnings'].append('deprecated_plaintext_password')
+
         return metadata
 
     def get_connection_params(self, alias: str) -> dict:
@@ -198,6 +202,7 @@ class SSHConfigLoaderV3:
             'user': config.get('user'),
             'port': int(config.get('port', 22)),
             'timeout': 30,  # 默认超时
+            'warnings': list(metadata.get('warnings', [])),
         }
 
         # 密钥文件

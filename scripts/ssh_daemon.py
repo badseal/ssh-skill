@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.join(_script_dir, 'lib'))
 from daemon_protocol import PROTOCOL_VERSION, fingerprint_execution, recv_frame, send_frame
 from output_limits import bound_result_output
 from request_registry import RequestIdConflict, RequestRegistry
+from security import configure_paramiko_host_keys
 
 
 # === 常量 ===
@@ -231,7 +232,7 @@ class SSHDaemon:
             key_file = os.path.abspath(key_file)
 
         client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        configure_paramiko_host_keys(client)
 
         connect_kwargs = {
             'hostname': host,
