@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, BinaryIO, Callable
+
+from output_limits import OutputLimits, collect_text
 
 
 @dataclass(frozen=True)
@@ -27,14 +29,22 @@ class TransportResult:
     stdout: str
     stderr: str
     exit_code: int
+    output: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_completed_process(cls, completed: subprocess.CompletedProcess[Any]) -> "TransportResult":
+    def from_completed_process(
+        cls,
+        completed: subprocess.CompletedProcess[Any],
+        limits: OutputLimits | None = None,
+    ) -> "TransportResult":
+        stdout = collect_text(_decode(completed.stdout), limits)
+        stderr = collect_text(_decode(completed.stderr), limits)
         return cls(
             success=completed.returncode == 0,
-            stdout=_decode(completed.stdout),
-            stderr=_decode(completed.stderr),
+            stdout=stdout.text,
+            stderr=stderr.text,
             exit_code=completed.returncode,
+            output={"stdout": stdout.to_meta(), "stderr": stderr.to_meta()},
         )
 
 
@@ -77,6 +87,7 @@ def run_openssh(
     timeout: int | float | None,
     *,
     runner: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
+    limits: OutputLimits | None = None,
 ) -> TransportResult:
     argv = build_ssh_argv(options, target, command)
     try:
@@ -92,7 +103,7 @@ def run_openssh(
         return TransportResult(False, "", f"command timed out after {timeout} seconds", -1)
     except OSError as exc:
         return TransportResult(False, "", f"OpenSSH execution failed: {exc}", -1)
-    return TransportResult.from_completed_process(completed)
+    return TransportResult.from_completed_process(completed, limits=limits)
 
 
 def resolve_command_input(

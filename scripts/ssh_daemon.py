@@ -37,6 +37,7 @@ _script_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_script_dir, 'lib'))
 
 from daemon_protocol import PROTOCOL_VERSION, fingerprint_execution, recv_frame, send_frame
+from output_limits import bound_result_output
 from request_registry import RequestIdConflict, RequestRegistry
 
 
@@ -393,7 +394,9 @@ class SSHDaemon:
             queue_ms = int((time.monotonic() - queued_at) * 1000)
             self._requests.mark_running(request_id, queue_ms=queue_ms)
             started_at = time.monotonic()
-            result = self._execute_command_unlocked(command, remote_timeout)
+            result = bound_result_output(
+                self._execute_command_unlocked(command, remote_timeout)
+            )
             execution_ms = int((time.monotonic() - started_at) * 1000)
         state = 'succeeded' if result.get('success') else 'failed'
         self._requests.finish(

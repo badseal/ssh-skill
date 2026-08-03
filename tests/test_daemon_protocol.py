@@ -98,6 +98,38 @@ class DaemonProtocolTests(unittest.TestCase):
         self.assertEqual("succeeded", first["request"]["state"])
         self.assertEqual("succeeded", second["request"]["state"])
 
+    def test_daemon_bounds_result_before_caching(self):
+        daemon = SSHDaemon.__new__(SSHDaemon)
+        daemon._requests = RequestRegistry()
+        daemon._lock = threading.Lock()
+        daemon._execute_command_unlocked = lambda command, timeout: {
+            "success": True,
+            "exit_code": 0,
+            "stdout": "x" * 300_000 + "TAIL",
+            "stderr": "",
+        }
+
+        class ImmediateThread:
+            def __init__(self, *, target, args, daemon):
+                self.target, self.args = target, args
+
+            def start(self):
+                self.target(*self.args)
+
+        response = daemon._submit_execution(
+            {
+                "protocol_version": "1.0",
+                "request_id": "req-large",
+                "command": "generate-output",
+                "remote_timeout": 30,
+            },
+            thread_factory=ImmediateThread,
+        )
+
+        cached = response["request"]["result"]
+        self.assertLessEqual(len(cached["stdout"].encode("utf-8")), 256 * 1024)
+        self.assertTrue(cached["output"]["stdout"]["truncated"])
+
 
 if __name__ == "__main__":
     unittest.main()

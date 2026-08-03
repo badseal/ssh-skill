@@ -100,6 +100,18 @@ class OpenSSHTransportTests(unittest.TestCase):
         self.assertIn("StrictHostKeyChecking=no", unsafe)
         self.assertNotIn("UserKnownHostsFile=/dev/null", unsafe)
 
+    def test_large_transport_output_is_bounded(self):
+        def runner(argv, **kwargs):
+            return subprocess.CompletedProcess(argv, 0, b"x" * 300_000 + b"TAIL", b"")
+
+        result = run_openssh(
+            self.options, "example-host", "generate-output", None, 30, runner=runner
+        )
+
+        self.assertLessEqual(len(result.stdout.encode("utf-8")), 256 * 1024)
+        self.assertTrue(result.output["stdout"]["truncated"])
+        self.assertTrue(result.stdout.endswith("TAIL"))
+
 
 if __name__ == "__main__":
     unittest.main()

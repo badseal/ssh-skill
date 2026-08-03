@@ -9,9 +9,11 @@ import paramiko
 import threading
 import time
 import os
-from typing import Optional, List, Union, Dict, Iterator
-from dataclasses import dataclass
+from typing import Optional, List, Union, Dict, Iterator, Any
+from dataclasses import dataclass, field
 from io import StringIO
+
+from output_limits import ProgressEmitter, collect_text
 
 
 @dataclass
@@ -21,6 +23,27 @@ class SSHResult:
     stdout: str
     stderr: str
     exit_code: int
+    output: Dict[str, Any] = field(default_factory=dict)
+
+
+def _bounded_ssh_result(
+    success: bool,
+    stdout: str | bytes,
+    stderr: str | bytes,
+    exit_code: int,
+) -> SSHResult:
+    bounded_stdout = collect_text(stdout)
+    bounded_stderr = collect_text(stderr)
+    return SSHResult(
+        success=success,
+        stdout=bounded_stdout.text,
+        stderr=bounded_stderr.text,
+        exit_code=exit_code,
+        output={
+            "stdout": bounded_stdout.to_meta(),
+            "stderr": bounded_stderr.to_meta(),
+        },
+    )
 
 
 class ConnectionPool:
@@ -591,15 +614,15 @@ class ParamikoClient:
             client = self._get_connection()
             stdin, stdout, stderr = client.exec_command(command, timeout=self.timeout)
 
-            stdout_text = stdout.read().decode('utf-8', errors='replace')
-            stderr_text = stderr.read().decode('utf-8', errors='replace')
+            stdout_bytes = stdout.read()
+            stderr_bytes = stderr.read()
             exit_code = stdout.channel.recv_exit_status()
 
-            return SSHResult(
-                success=(exit_code == 0),
-                stdout=stdout_text,
-                stderr=stderr_text,
-                exit_code=exit_code
+            return _bounded_ssh_result(
+                exit_code == 0,
+                stdout_bytes,
+                stderr_bytes,
+                exit_code,
             )
         except Exception as e:
             return SSHResult(
@@ -658,8 +681,8 @@ class ParamikoClient:
                 command, timeout=cmd_timeout, get_pty=True
             )
 
-            stdout_text = stdout.read().decode('utf-8', errors='replace')
-            stderr_text = stderr.read().decode('utf-8', errors='replace')
+            stdout_bytes = stdout.read()
+            stderr_bytes = stderr.read()
             exit_code = stdout.channel.recv_exit_status()
 
             try:
@@ -671,11 +694,11 @@ class ParamikoClient:
             except Exception:
                 pass
 
-            return SSHResult(
-                success=(exit_code == 0),
-                stdout=stdout_text,
-                stderr=stderr_text,
-                exit_code=exit_code
+            return _bounded_ssh_result(
+                exit_code == 0,
+                stdout_bytes,
+                stderr_bytes,
+                exit_code,
             )
         except Exception as e:
             return SSHResult(
@@ -729,20 +752,17 @@ class ParamikoClient:
                 # 大文件传输：设置为 None（无限制）
                 sftp.get_channel().settimeout(None)
 
-            # 进度回调
+            progress_emitter = ProgressEmitter(sys.stderr, enabled=show_progress)
+
             def progress_callback(progress: TransferProgress):
-                if show_progress:
-                    info = progress.to_dict()
-                    sys.stderr.write(f"\r上传进度: {info['percent']}% ({info['speed']}) ETA: {info['eta']}s")
-                    sys.stderr.flush()
+                progress_emitter.emit(
+                    'upload', progress.transferred_bytes, progress.total_bytes,
+                    file_path=progress.file_path,
+                )
 
             # 使用 SFTPTransfer 上传（支持分块和进度）
             transfer = SFTPTransfer(sftp, progress_callback=progress_callback if show_progress else None)
             result = transfer.upload_file(local_path, remote_path, resume=False)
-
-            if show_progress:
-                sys.stderr.write("\n")
-                sys.stderr.flush()
 
             sftp.close()
 
@@ -809,20 +829,17 @@ class ParamikoClient:
             else:
                 sftp.get_channel().settimeout(None)
 
-            # 进度回调
+            progress_emitter = ProgressEmitter(sys.stderr, enabled=show_progress)
+
             def progress_callback(progress: TransferProgress):
-                if show_progress:
-                    info = progress.to_dict()
-                    sys.stderr.write(f"\r上传进度: {info['percent']}% ({info['speed']}) ETA: {info['eta']}s")
-                    sys.stderr.flush()
+                progress_emitter.emit(
+                    'upload', progress.transferred_bytes, progress.total_bytes,
+                    file_path=progress.file_path,
+                )
 
             # 使用 SFTPTransfer 上传
             transfer = SFTPTransfer(sftp, progress_callback=progress_callback if show_progress else None)
             result = transfer.upload_file(local_path, remote_path, resume=False)
-
-            if show_progress:
-                sys.stderr.write("\n")
-                sys.stderr.flush()
 
             sftp.close()
 
@@ -952,20 +969,17 @@ class ParamikoClient:
                 # 大文件传输：设置为 None（无限制）
                 sftp.get_channel().settimeout(None)
 
-            # 进度回调
+            progress_emitter = ProgressEmitter(sys.stderr, enabled=show_progress)
+
             def progress_callback(progress: TransferProgress):
-                if show_progress:
-                    info = progress.to_dict()
-                    sys.stderr.write(f"\r下载进度: {info['percent']}% ({info['speed']}) ETA: {info['eta']}s")
-                    sys.stderr.flush()
+                progress_emitter.emit(
+                    'download', progress.transferred_bytes, progress.total_bytes,
+                    file_path=progress.file_path,
+                )
 
             # 使用 SFTPTransfer 下载（支持分块和进度）
             transfer = SFTPTransfer(sftp, progress_callback=progress_callback if show_progress else None)
             result = transfer.download_file(remote_path, local_path, resume=False)
-
-            if show_progress:
-                sys.stderr.write("\n")
-                sys.stderr.flush()
 
             sftp.close()
 
@@ -1028,20 +1042,17 @@ class ParamikoClient:
             else:
                 sftp.get_channel().settimeout(None)
 
-            # 进度回调
+            progress_emitter = ProgressEmitter(sys.stderr, enabled=show_progress)
+
             def progress_callback(progress: TransferProgress):
-                if show_progress:
-                    info = progress.to_dict()
-                    sys.stderr.write(f"\r下载进度: {info['percent']}% ({info['speed']}) ETA: {info['eta']}s")
-                    sys.stderr.flush()
+                progress_emitter.emit(
+                    'download', progress.transferred_bytes, progress.total_bytes,
+                    file_path=progress.file_path,
+                )
 
             # 使用 SFTPTransfer 下载
             transfer = SFTPTransfer(sftp, progress_callback=progress_callback if show_progress else None)
             result = transfer.download_file(remote_path, local_path, resume=False)
-
-            if show_progress:
-                sys.stderr.write("\n")
-                sys.stderr.flush()
 
             sftp.close()
 

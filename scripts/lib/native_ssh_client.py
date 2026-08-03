@@ -13,10 +13,11 @@
 import subprocess
 import os
 import tempfile
-from typing import Optional, Iterator
-from dataclasses import dataclass
+from typing import Any, Dict, Optional, Iterator
+from dataclasses import dataclass, field
 
 from openssh_transport import OpenSSHOptions, run_openssh
+from output_limits import collect_text
 from platform_adapter import find_openssh, normalize_platform
 
 
@@ -27,6 +28,27 @@ class SSHResult:
     stdout: str
     stderr: str
     exit_code: int
+    output: Dict[str, Any] = field(default_factory=dict)
+
+
+def _bounded_ssh_result(
+    success: bool,
+    stdout: str | bytes,
+    stderr: str | bytes,
+    exit_code: int,
+) -> SSHResult:
+    bounded_stdout = collect_text(stdout)
+    bounded_stderr = collect_text(stderr)
+    return SSHResult(
+        success=success,
+        stdout=bounded_stdout.text,
+        stderr=bounded_stderr.text,
+        exit_code=exit_code,
+        output={
+            "stdout": bounded_stdout.to_meta(),
+            "stderr": bounded_stderr.to_meta(),
+        },
+    )
 
 
 class NativeSSHClient:
@@ -147,7 +169,13 @@ class NativeSSHClient:
             None,
             self.timeout,
         )
-        return SSHResult(result.success, result.stdout, result.stderr, result.exit_code)
+        return SSHResult(
+            result.success,
+            result.stdout,
+            result.stderr,
+            result.exit_code,
+            output=result.output,
+        )
 
     def upload(self, local_path: str, remote_path: str, timeout: Optional[int] = None, show_progress: bool = True) -> SSHResult:
         """
@@ -220,11 +248,11 @@ class NativeSSHClient:
                 timeout=actual_timeout
             )
 
-            return SSHResult(
-                success=(result.returncode == 0),
-                stdout=f"File uploaded: {local_path} -> {remote_path}" if result.returncode == 0 else result.stdout,
-                stderr=result.stderr if result.returncode != 0 else "",
-                exit_code=result.returncode
+            return _bounded_ssh_result(
+                result.returncode == 0,
+                f"File uploaded: {local_path} -> {remote_path}" if result.returncode == 0 else result.stdout,
+                result.stderr if result.returncode != 0 else "",
+                result.returncode,
             )
         except subprocess.TimeoutExpired:
             return SSHResult(
@@ -301,11 +329,11 @@ class NativeSSHClient:
                 timeout=actual_timeout
             )
 
-            return SSHResult(
-                success=(result.returncode == 0),
-                stdout=f"File downloaded: {remote_path} -> {local_path}" if result.returncode == 0 else result.stdout,
-                stderr=result.stderr if result.returncode != 0 else "",
-                exit_code=result.returncode
+            return _bounded_ssh_result(
+                result.returncode == 0,
+                f"File downloaded: {remote_path} -> {local_path}" if result.returncode == 0 else result.stdout,
+                result.stderr if result.returncode != 0 else "",
+                result.returncode,
             )
         except subprocess.TimeoutExpired:
             return SSHResult(
