@@ -61,6 +61,17 @@ class ResultProtocolTests(unittest.TestCase):
         self.assertEqual(1, len(stream.getvalue().splitlines()))
         self.assertEqual(result, json.loads(stream.getvalue()))
 
+    def test_write_result_is_ascii_safe_and_round_trips_unicode(self):
+        stream = io.StringIO()
+        result = success_result(
+            "doctor", {"path": "D:/Lab/Systems/AI-Skill-\u5f00\u53d1"}
+        )
+
+        write_result(result, stream=stream)
+
+        self.assertTrue(stream.getvalue().isascii())
+        self.assertEqual(result, json.loads(stream.getvalue()))
+
     def test_invalid_outcome_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "outcome"):
             error_result(

@@ -77,7 +77,7 @@ def error_result(
 
 
 def write_result(result: dict[str, Any], stream: TextIO = sys.stdout) -> None:
-    stream.write(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+    stream.write(json.dumps(result, ensure_ascii=True, separators=(",", ":")))
     stream.write("\n")
 
 
