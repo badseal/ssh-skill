@@ -28,7 +28,6 @@ import time
 import hashlib
 import signal
 import tempfile
-import struct
 import traceback
 import argparse
 from pathlib import Path
@@ -36,6 +35,9 @@ from pathlib import Path
 # 添加 lib 到路径
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_script_dir, 'lib'))
+
+from daemon_protocol import PROTOCOL_VERSION, fingerprint_execution, recv_frame, send_frame
+from request_registry import RequestIdConflict, RequestRegistry
 
 
 # === 常量 ===
@@ -97,37 +99,12 @@ def _is_process_alive(pid: int) -> bool:
 
 def _send_message(sock: socket.socket, data: dict):
     """发送带长度前缀的 JSON 消息"""
-    payload = json.dumps(data, ensure_ascii=False).encode('utf-8')
-    header = struct.pack('!I', len(payload))
-    sock.sendall(header + payload)
+    return send_frame(sock, data)
 
 
 def _recv_message(sock: socket.socket, timeout: float = None) -> dict:
     """接收带长度前缀的 JSON 消息"""
-    if timeout:
-        sock.settimeout(timeout)
-
-    # 读取 4 字节长度头
-    header = b''
-    while len(header) < 4:
-        chunk = sock.recv(4 - len(header))
-        if not chunk:
-            raise ConnectionError("连接已关闭")
-        header += chunk
-
-    length = struct.unpack('!I', header)[0]
-    if length > 10 * 1024 * 1024:  # 10MB 上限
-        raise ValueError(f"消息过大: {length} bytes")
-
-    # 读取消息体
-    body = b''
-    while len(body) < length:
-        chunk = sock.recv(min(RECV_BUFFER, length - len(body)))
-        if not chunk:
-            raise ConnectionError("连接已关闭")
-        body += chunk
-
-    return json.loads(body.decode('utf-8'))
+    return recv_frame(sock, timeout=timeout)
 
 
 class SSHDaemon:
@@ -141,6 +118,7 @@ class SSHDaemon:
         self._server_socket = None
         self._ssh_client = None
         self._lock = threading.Lock()
+        self._requests = RequestRegistry()
         self._connection_params = None  # 缓存连接参数
 
     def start(self):
@@ -319,8 +297,8 @@ class SSHDaemon:
     def _handle_client(self, client_sock: socket.socket):
         """处理单个客户端连接"""
         try:
-            client_sock.settimeout(300)  # 单次请求最长 5 分钟
-            request = _recv_message(client_sock, timeout=300)
+            client_sock.settimeout(10)
+            request = _recv_message(client_sock, timeout=10)
             action = request.get('action', '')
 
             if action == 'ping':
@@ -333,12 +311,24 @@ class SSHDaemon:
                     'idle_seconds': int(time.time() - self._last_activity)
                 })
 
-            elif action == 'execute':
+            elif action == 'submit':
                 self._last_activity = time.time()
-                command = request.get('command', '')
-                timeout = request.get('timeout', 30)
-                result = self._execute_command(command, timeout)
-                _send_message(client_sock, result)
+                _send_message(client_sock, self._submit_execution(request))
+
+            elif action == 'status':
+                record = self._requests.get(request.get('request_id', ''))
+                _send_message(client_sock, {
+                    'protocol_version': PROTOCOL_VERSION,
+                    'status': 'not_found' if record is None else 'ok',
+                    'request': None if record is None else record.to_dict(),
+                })
+
+            elif action == 'execute':
+                _send_message(client_sock, {
+                    'protocol_version': PROTOCOL_VERSION,
+                    'status': 'protocol_upgrade_required',
+                    'error': 'v4 requests require action=submit and request_id',
+                })
 
             elif action == 'shutdown':
                 _send_message(client_sock, {'status': 'shutting_down'})
@@ -368,40 +358,83 @@ class SSHDaemon:
             except Exception:
                 pass
 
+    def _submit_execution(self, request: dict, thread_factory=threading.Thread) -> dict:
+        if request.get('protocol_version') != PROTOCOL_VERSION:
+            return {'protocol_version': PROTOCOL_VERSION, 'status': 'unsupported_protocol'}
+        request_id = request.get('request_id', '')
+        command = request.get('command')
+        remote_timeout = request.get('remote_timeout', 30)
+        if not request_id or not isinstance(command, str) or not command:
+            return {'protocol_version': PROTOCOL_VERSION, 'status': 'invalid_request'}
+        if not isinstance(remote_timeout, int) or remote_timeout <= 0:
+            return {'protocol_version': PROTOCOL_VERSION, 'status': 'invalid_timeout'}
+        fingerprint = fingerprint_execution(command, remote_timeout)
+        try:
+            record, created = self._requests.accept(request_id, fingerprint)
+        except RequestIdConflict:
+            return {'protocol_version': PROTOCOL_VERSION, 'status': 'request_id_conflict'}
+        if created:
+            worker = thread_factory(
+                target=self._run_request,
+                args=(request_id, command, remote_timeout),
+                daemon=True,
+            )
+            worker.start()
+        current = self._requests.get(request_id) or record
+        return {
+            'protocol_version': PROTOCOL_VERSION,
+            'status': 'ok',
+            'request': current.to_dict(),
+        }
+
+    def _run_request(self, request_id: str, command: str, remote_timeout: int) -> None:
+        queued_at = time.monotonic()
+        with self._lock:
+            queue_ms = int((time.monotonic() - queued_at) * 1000)
+            self._requests.mark_running(request_id, queue_ms=queue_ms)
+            started_at = time.monotonic()
+            result = self._execute_command_unlocked(command, remote_timeout)
+            execution_ms = int((time.monotonic() - started_at) * 1000)
+        state = 'succeeded' if result.get('success') else 'failed'
+        self._requests.finish(
+            request_id,
+            state=state,
+            result=result,
+            execution_ms=execution_ms,
+        )
+
     def _execute_command(self, command: str, timeout: int) -> dict:
         """通过长连接执行远程命令"""
         with self._lock:
-            # 检查连接是否存活，断开则重连
-            if not self._is_ssh_alive():
-                if not self._reconnect_ssh():
-                    return {
-                        'success': False,
-                        'exit_code': -1,
-                        'stdout': '',
-                        'stderr': 'SSH 连接已断开且重连失败'
-                    }
+            return self._execute_command_unlocked(command, timeout)
 
-            try:
-                stdin, stdout, stderr = self._ssh_client.exec_command(
-                    command, timeout=timeout
-                )
-                stdout_text = stdout.read().decode('utf-8', errors='replace')
-                stderr_text = stderr.read().decode('utf-8', errors='replace')
-                exit_code = stdout.channel.recv_exit_status()
-
-                return {
-                    'success': exit_code == 0,
-                    'exit_code': exit_code,
-                    'stdout': stdout_text,
-                    'stderr': stderr_text
-                }
-            except Exception as e:
+    def _execute_command_unlocked(self, command: str, timeout: int) -> dict:
+        if not self._is_ssh_alive():
+            if not self._reconnect_ssh():
                 return {
                     'success': False,
                     'exit_code': -1,
                     'stdout': '',
-                    'stderr': f'命令执行错误: {str(e)}'
+                    'stderr': 'SSH 连接已断开且重连失败'
                 }
+        try:
+            stdin, stdout, stderr = self._ssh_client.exec_command(command, timeout=timeout)
+            stdout_text = stdout.read().decode('utf-8', errors='replace')
+            stderr_text = stderr.read().decode('utf-8', errors='replace')
+            exit_code = stdout.channel.recv_exit_status()
+            return {
+                'success': exit_code == 0,
+                'exit_code': exit_code,
+                'stdout': stdout_text,
+                'stderr': stderr_text
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'exit_code': -1,
+                'stdout': '',
+                'stderr': f'命令执行错误: {str(e)}'
+            }
 
     def _heartbeat_loop(self):
         """心跳检测线程：定期检查 SSH 连接"""

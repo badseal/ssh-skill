@@ -19,70 +19,149 @@ import sys
 import os
 import json
 import socket
-import struct
 import argparse
 import subprocess
+import time
+import uuid
+from dataclasses import dataclass
 
 # 添加lib到路径
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_script_dir, 'lib'))
 
+from daemon_protocol import PROTOCOL_VERSION, FrameSendError, recv_frame, send_frame
+from result_protocol import error_result
+
+
+@dataclass(frozen=True)
+class DaemonAttempt:
+    disposition: str
+    request_id: str
+    result: dict | None = None
+
+
+def may_fallback(attempt: DaemonAttempt) -> bool:
+    return attempt.disposition == 'not_sent'
+
+
+def daemon_attempt_to_result(attempt: DaemonAttempt) -> dict:
+    if attempt.disposition == 'completed' and attempt.result is not None:
+        return attempt.result
+    if attempt.disposition == 'outcome_unknown':
+        return error_result(
+            'exec',
+            code='outcome_unknown',
+            message='daemon accepted the request but its final status is unavailable',
+            retryable=False,
+            outcome='unknown',
+            request_id=attempt.request_id,
+            transport='daemon',
+        )
+    return error_result(
+        'exec',
+        code='daemon_unavailable',
+        message='daemon request was not sent',
+        retryable=True,
+        request_id=attempt.request_id,
+        transport='daemon',
+    )
+
 
 def _send_message(sock, data):
     """发送带长度前缀的 JSON 消息"""
-    payload = json.dumps(data, ensure_ascii=False).encode('utf-8')
-    header = struct.pack('!I', len(payload))
-    sock.sendall(header + payload)
+    return send_frame(sock, data)
 
 
 def _recv_message(sock, timeout=None):
     """接收带长度前缀的 JSON 消息"""
-    if timeout:
-        sock.settimeout(timeout)
-
-    header = b''
-    while len(header) < 4:
-        chunk = sock.recv(4 - len(header))
-        if not chunk:
-            raise ConnectionError("连接已关闭")
-        header += chunk
-
-    length = struct.unpack('!I', header)[0]
-    if length > 10 * 1024 * 1024:
-        raise ValueError(f"消息过大: {length} bytes")
-
-    body = b''
-    while len(body) < length:
-        chunk = sock.recv(min(65536, length - len(body)))
-        if not chunk:
-            raise ConnectionError("连接已关闭")
-        body += chunk
-
-    return json.loads(body.decode('utf-8'))
+    return recv_frame(sock, timeout=timeout)
 
 
-def try_daemon_execute(alias, command, timeout):
-    """尝试通过守护进程执行命令，返回 None 表示守护进程不可用"""
-    from ssh_daemon import read_daemon_info
-
-    info = read_daemon_info(alias)
+def try_daemon_execute(
+    alias,
+    command,
+    timeout,
+    *,
+    wait_timeout=None,
+    request_id=None,
+    daemon_info_reader=None,
+    socket_factory=socket.socket,
+    clock=time.monotonic,
+    sleep=time.sleep,
+):
+    """提交 daemon 请求；只有未发送任何字节时才允许降级。"""
+    if daemon_info_reader is None:
+        from ssh_daemon import read_daemon_info
+        daemon_info_reader = read_daemon_info
+    request_id = request_id or str(uuid.uuid4())
+    info = daemon_info_reader(alias)
     if not info:
-        return None
-
+        return DaemonAttempt('not_sent', request_id)
+    sock = None
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout + 5)
+        sock = socket_factory(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5)
         sock.connect(('127.0.0.1', info['port']))
-        _send_message(sock, {
-            'action': 'execute',
-            'command': command,
-            'timeout': timeout
-        })
-        result = _recv_message(sock, timeout=timeout + 5)
-        sock.close()
-        return result
     except Exception:
-        return None
+        if sock is not None:
+            sock.close()
+        return DaemonAttempt('not_sent', request_id)
+    try:
+        _send_message(sock, {
+            'protocol_version': PROTOCOL_VERSION,
+            'action': 'submit',
+            'request_id': request_id,
+            'command': command,
+            'remote_timeout': timeout,
+        })
+    except FrameSendError as exc:
+        sock.close()
+        disposition = 'not_sent' if exc.bytes_sent == 0 else 'outcome_unknown'
+        return DaemonAttempt(disposition, request_id)
+    try:
+        response = _recv_message(sock, timeout=5)
+    except Exception:
+        sock.close()
+        return DaemonAttempt('outcome_unknown', request_id)
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+    if response.get('status') != 'ok':
+        return DaemonAttempt('completed', request_id, {
+            'success': False,
+            'exit_code': -1,
+            'stdout': '',
+            'stderr': response.get('error') or response.get('status', 'daemon protocol error'),
+        })
+    deadline = clock() + (wait_timeout if wait_timeout is not None else timeout + 5)
+    request = response.get('request') or {}
+    while request.get('state') in ('accepted', 'running') and clock() < deadline:
+        sleep(0.1)
+        status_sock = None
+        try:
+            status_sock = socket_factory(socket.AF_INET, socket.SOCK_STREAM)
+            status_sock.settimeout(5)
+            status_sock.connect(('127.0.0.1', info['port']))
+            _send_message(status_sock, {
+                'protocol_version': PROTOCOL_VERSION,
+                'action': 'status',
+                'request_id': request_id,
+            })
+            status_response = _recv_message(status_sock, timeout=5)
+            request = status_response.get('request') or {}
+        except Exception:
+            return DaemonAttempt('outcome_unknown', request_id)
+        finally:
+            if status_sock is not None:
+                try:
+                    status_sock.close()
+                except Exception:
+                    pass
+    if request.get('state') in ('succeeded', 'failed'):
+        return DaemonAttempt('completed', request_id, request.get('result') or {})
+    return DaemonAttempt('outcome_unknown', request_id)
 
 
 def start_daemon_background(alias):
@@ -195,12 +274,18 @@ def main():
 
         if use_daemon:
             # 密码认证：尝试通过守护进程执行
-            result = try_daemon_execute(args.alias, args.command, timeout)
+            attempt = try_daemon_execute(args.alias, args.command, timeout)
+            if attempt.disposition == 'completed':
+                result = daemon_attempt_to_result(attempt)
+            elif attempt.disposition == 'outcome_unknown':
+                result = daemon_attempt_to_result(attempt)
 
             # 守护进程不可用，尝试后台启动
-            if result is None:
+            if result is None and may_fallback(attempt):
                 if start_daemon_background(args.alias):
-                    result = try_daemon_execute(args.alias, args.command, timeout)
+                    attempt = try_daemon_execute(args.alias, args.command, timeout)
+                    if not may_fallback(attempt):
+                        result = daemon_attempt_to_result(attempt)
 
         # 仍然没有结果，使用直连（密钥认证会使用 NativeSSHClient）
         if result is None:
