@@ -16,6 +16,9 @@ import tempfile
 from typing import Optional, Iterator
 from dataclasses import dataclass
 
+from openssh_transport import OpenSSHOptions, run_openssh
+from platform_adapter import find_openssh, normalize_platform
+
 
 @dataclass
 class SSHResult:
@@ -121,41 +124,30 @@ class NativeSSHClient:
         Returns:
             SSHResult对象，包含执行结果
         """
-        try:
-            args = self._build_ssh_base_args()
-            args.append(f"{self.user}@{self.host}")
-            args.append(command)
-
-            result = subprocess.run(
-                args,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
-                timeout=self.timeout
-            )
-
-            return SSHResult(
-                success=(result.returncode == 0),
-                stdout=result.stdout,
-                stderr=result.stderr,
-                exit_code=result.returncode
-            )
-        except subprocess.TimeoutExpired:
+        executable = find_openssh(normalize_platform())
+        if not executable:
             return SSHResult(
                 success=False,
                 stdout="",
-                stderr=f"Command timeout after {self.timeout} seconds",
+                stderr="OpenSSH client was not found",
                 exit_code=-1
             )
-        except Exception as e:
-            return SSHResult(
-                success=False,
-                stdout="",
-                stderr=f"Execution error: {str(e)}",
-                exit_code=-1
-            )
+        target = self.alias if self.alias else f"{self.user}@{self.host}"
+        result = run_openssh(
+            OpenSSHOptions(
+                executable=executable,
+                config_path=os.path.expanduser("~/.ssh/config"),
+                port=self.port,
+                key_file=os.path.expanduser(self.key_file) if self.key_file else None,
+                proxy_jump=self.proxy_jump,
+                forward_agent=self.forward_agent,
+            ),
+            target,
+            command,
+            None,
+            self.timeout,
+        )
+        return SSHResult(result.success, result.stdout, result.stderr, result.exit_code)
 
     def upload(self, local_path: str, remote_path: str, timeout: Optional[int] = None, show_progress: bool = True) -> SSHResult:
         """

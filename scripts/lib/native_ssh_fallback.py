@@ -10,6 +10,7 @@ import os
 import ntpath
 from typing import Optional, Dict, Tuple
 
+from openssh_transport import OpenSSHOptions, run_openssh
 from platform_adapter import find_openssh, inspect_ssh_agent, normalize_platform
 
 
@@ -197,51 +198,20 @@ def execute_native_ssh(
             'method': f'native_ssh_{platform_name}'
         }
 
-    ssh_cmd = [
-        executable,
-        '-F', ssh_config_path,
-        '-o', 'BatchMode=yes',
-        '-o', 'StrictHostKeyChecking=accept-new',
+    result = run_openssh(
+        OpenSSHOptions(executable=executable, config_path=ssh_config_path),
         alias,
-        command
-    ]
-
-    try:
-        result = subprocess.run(
-            ssh_cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            encoding='utf-8',
-            errors='replace',
-            shell=False
-        )
-
-        return {
-            'success': result.returncode == 0,
-            'exit_code': result.returncode,
-            'stdout': result.stdout,
-            'stderr': result.stderr,
-            'method': f'native_ssh_{platform_name}'
-        }
-
-    except subprocess.TimeoutExpired:
-        return {
-            'success': False,
-            'exit_code': -1,
-            'stdout': '',
-            'stderr': f'命令执行超时（{timeout}秒）',
-            'method': f'native_ssh_{platform_name}'
-        }
-
-    except Exception as e:
-        return {
-            'success': False,
-            'exit_code': -1,
-            'stdout': '',
-            'stderr': f'执行失败: {str(e)}',
-            'method': f'native_ssh_{platform_name}'
-        }
+        command,
+        None,
+        timeout,
+    )
+    return {
+        'success': result.success,
+        'exit_code': result.exit_code,
+        'stdout': result.stdout,
+        'stderr': result.stderr,
+        'method': f'native_ssh_{platform_name}'
+    }
 
 
 def check_ssh_agent() -> Tuple[bool, str]:
