@@ -240,12 +240,15 @@ def _delegated_handler(operation: str, script_name: str) -> Handler:
     )
 
 
-def _doctor_placeholder(args):
-    return error_result(
-        "doctor",
-        code="doctor_unavailable",
-        message="doctor implementation is unavailable",
+def _doctor_handler(args):
+    from doctor import create_default_context, run_doctor
+
+    project_root = Path(args.project_root) if args.project_root else Path.cwd()
+    context = create_default_context(
+        current_root=_SCRIPT_DIR.parent,
+        project_root=project_root,
     )
+    return run_doctor(context)
 
 
 def default_dependencies() -> Dependencies:
@@ -258,7 +261,7 @@ def default_dependencies() -> Dependencies:
         config_handler=_delegated_handler("config", "ssh_config_manager_v3.py"),
         tunnel_handler=_delegated_handler("tunnel", "ssh_tunnel.py"),
         daemon_handler=_delegated_handler("daemon", "ssh_daemon.py"),
-        doctor_handler=_doctor_placeholder,
+        doctor_handler=_doctor_handler,
     )
 
 
