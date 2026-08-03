@@ -96,6 +96,21 @@ class SSHConfigLoaderV3:
         except Exception:
             return False
 
+    def list_hosts(self) -> List[str]:
+        """返回不含通配符的确定性 Host 别名列表。"""
+        if not os.path.exists(self.config_path):
+            return []
+        aliases = []
+        with open(self.config_path, 'r', encoding='utf-8') as stream:
+            for line in stream:
+                stripped = line.strip()
+                if not stripped.startswith('Host ') or stripped.startswith('Host *'):
+                    continue
+                alias = stripped.split(None, 1)[1].strip()
+                if '*' not in alias and '?' not in alias:
+                    aliases.append(alias)
+        return sorted(set(aliases))
+
     def load_metadata(self, alias: str) -> dict:
         """
         从注释中加载元数据
