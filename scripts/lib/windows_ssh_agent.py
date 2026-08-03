@@ -5,12 +5,39 @@ Windows SSH Agent 自动配置工具
 """
 
 import subprocess
-import sys
 import os
 import json
+import re
 
 
-def check_windows_ssh_agent():
+def _run_sc(arguments, runner=subprocess.run):
+    return runner(
+        ['sc.exe', *arguments],
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        errors='replace',
+        timeout=10,
+        shell=False,
+    )
+
+
+def _service_value(output, field):
+    match = re.search(rf'\b{field}\s*:\s*(\d+)', output, re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
+def _requires_admin(result):
+    message = f'{result.stdout}\n{result.stderr}'.lower()
+    return (
+        ('access' in message and 'denied' in message)
+        or 'permissiondenied' in message
+        or '拒绝访问' in message
+        or 'error 5' in message
+    )
+
+
+def check_windows_ssh_agent(*, runner=subprocess.run):
     """检查 Windows SSH Agent 服务状态"""
     if os.name != 'nt':
         return {
@@ -20,17 +47,7 @@ def check_windows_ssh_agent():
         }
 
     try:
-        # 检查服务状态（使用 UTF-8 编码）
-        result = subprocess.run(
-            ['powershell', '-NoProfile', '-Command',
-             '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ' +
-             'Get-Service ssh-agent | Select-Object Status,StartType | ConvertTo-Json'],
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            timeout=10
-        )
+        result = _run_sc(['query', 'ssh-agent'], runner)
 
         if result.returncode != 0:
             return {
@@ -39,10 +56,12 @@ def check_windows_ssh_agent():
                 'message': 'OpenSSH Authentication Agent 服务不存在（需要安装 OpenSSH 客户端）'
             }
 
-        # 解析服务状态
-        service_info = json.loads(result.stdout)
-        status = service_info.get('Status', 0)
-        start_type = service_info.get('StartType', 0)
+        config_result = _run_sc(['qc', 'ssh-agent'], runner)
+        status = _service_value(result.stdout, 'STATE')
+        start_type = (
+            _service_value(config_result.stdout, 'START_TYPE')
+            if config_result.returncode == 0 else None
+        )
 
         # Status: 1=Stopped, 4=Running
         # StartType: 2=Automatic, 3=Manual, 4=Disabled
@@ -65,7 +84,7 @@ def check_windows_ssh_agent():
         }
 
 
-def start_windows_ssh_agent():
+def start_windows_ssh_agent(*, runner=subprocess.run):
     """启动 Windows SSH Agent 服务"""
     if os.name != 'nt':
         return {
@@ -74,25 +93,17 @@ def start_windows_ssh_agent():
         }
 
     try:
-        # 尝试启动服务（使用 UTF-8 编码）
-        result = subprocess.run(
-            ['powershell', '-NoProfile', '-Command',
-             '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Start-Service ssh-agent'],
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            timeout=10
-        )
+        result = _run_sc(['start', 'ssh-agent'], runner)
 
-        if result.returncode == 0:
+        already_running = '1056' in f'{result.stdout}\n{result.stderr}'
+        if result.returncode == 0 or already_running:
             return {
                 'success': True,
                 'message': 'SSH Agent 服务已启动'
             }
         else:
             # 检查是否是权限问题
-            if 'Access is denied' in result.stderr or '拒绝访问' in result.stderr:
+            if _requires_admin(result):
                 return {
                     'success': False,
                     'message': '需要管理员权限启动服务',
@@ -111,7 +122,7 @@ def start_windows_ssh_agent():
         }
 
 
-def enable_windows_ssh_agent_auto_start():
+def enable_windows_ssh_agent_auto_start(*, runner=subprocess.run):
     """设置 Windows SSH Agent 服务为自动启动"""
     if os.name != 'nt':
         return {
@@ -120,15 +131,8 @@ def enable_windows_ssh_agent_auto_start():
         }
 
     try:
-        # 设置为自动启动（使用 UTF-8 编码）
-        result = subprocess.run(
-            ['powershell', '-NoProfile', '-Command',
-             '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Set-Service -Name ssh-agent -StartupType Automatic'],
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            timeout=10
+        result = _run_sc(
+            ['config', 'ssh-agent', 'start=', 'auto'], runner
         )
 
         if result.returncode == 0:
@@ -138,8 +142,7 @@ def enable_windows_ssh_agent_auto_start():
             }
         else:
             # 检查是否是权限问题（移除换行符后检查）
-            stderr_clean = result.stderr.replace('\n', ' ').replace('\r', ' ').lower()
-            if ('access' in stderr_clean and 'denied' in stderr_clean) or 'permissiondenied' in stderr_clean:
+            if _requires_admin(result):
                 return {
                     'success': False,
                     'message': '需要管理员权限修改服务配置',
@@ -158,7 +161,7 @@ def enable_windows_ssh_agent_auto_start():
         }
 
 
-def setup_windows_ssh_agent(auto_start=True):
+def setup_windows_ssh_agent(auto_start=True, *, runner=subprocess.run):
     """
     一键配置 Windows SSH Agent
 
@@ -174,7 +177,7 @@ def setup_windows_ssh_agent(auto_start=True):
     }
 
     # 1. 检查服务状态
-    status = check_windows_ssh_agent()
+    status = check_windows_ssh_agent(runner=runner)
     result['steps'].append({
         'step': 'check_service',
         'result': status
@@ -186,7 +189,7 @@ def setup_windows_ssh_agent(auto_start=True):
 
     # 2. 如果启动类型是 Disabled，先设置为 Automatic
     if status.get('start_type') == 'Disabled':
-        auto_result = enable_windows_ssh_agent_auto_start()
+        auto_result = enable_windows_ssh_agent_auto_start(runner=runner)
         result['steps'].append({
             'step': 'enable_auto_start',
             'result': auto_result
@@ -199,7 +202,7 @@ def setup_windows_ssh_agent(auto_start=True):
 
     # 3. 如果未运行，启动服务
     if not status.get('running'):
-        start_result = start_windows_ssh_agent()
+        start_result = start_windows_ssh_agent(runner=runner)
         result['steps'].append({
             'step': 'start_service',
             'result': start_result
@@ -212,7 +215,7 @@ def setup_windows_ssh_agent(auto_start=True):
 
     # 4. 如果需要且还未设置，确保自动启动
     if auto_start and not status.get('auto_start') and status.get('start_type') != 'Disabled':
-        auto_result = enable_windows_ssh_agent_auto_start()
+        auto_result = enable_windows_ssh_agent_auto_start(runner=runner)
         result['steps'].append({
             'step': 'ensure_auto_start',
             'result': auto_result
@@ -232,11 +235,11 @@ def get_setup_instructions():
     return """
 Windows SSH Agent 手动配置步骤：
 
-方法 1：使用管理员权限的 PowerShell
-1. 右键点击"开始"菜单，选择"Windows PowerShell (管理员)"
+方法 1：使用管理员权限的 Windows 终端
+1. 右键点击"开始"菜单，选择"终端管理员"
 2. 运行以下命令：
-   Set-Service -Name ssh-agent -StartupType Automatic
-   Start-Service ssh-agent
+   sc.exe config ssh-agent start= auto
+   sc.exe start ssh-agent
 
 方法 2：使用服务管理器
 1. 按 Win+R，输入 services.msc
