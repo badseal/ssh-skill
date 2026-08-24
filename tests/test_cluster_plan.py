@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import io
 import json
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from tests import support  # noqa: F401
 from cluster_plan import (
@@ -124,6 +126,87 @@ class ClusterPlanTests(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertEqual("client_creation_failed", result["error"]["code"])
         self.assertIn("dev-a", result["data"]["client_errors"])
+
+    def test_cluster_stops_replay_when_any_target_outcome_is_unknown(self):
+        class FakeCluster:
+            client_errors = {}
+
+            @staticmethod
+            def execute_all(command, parallel, timeout):
+                return {
+                    "dev-a": SimpleNamespace(
+                        success=False,
+                        exit_code=-1,
+                        stdout="",
+                        stderr="command timed out",
+                        error_code="outcome_unknown",
+                        retryable=False,
+                        outcome="unknown",
+                    )
+                }
+
+        loader = FakeLoader([
+            ("dev-a", {"environment": "development", "tags": []}),
+        ])
+        stdout = io.StringIO()
+
+        with patch("ssh_cluster.SSHCluster.from_plan", return_value=FakeCluster()):
+            code = main(
+                ["apply-change", "--hosts", "dev-a", "--apply"],
+                loader=loader,
+                stdout=stdout,
+            )
+
+        result = json.loads(stdout.getvalue())
+        self.assertEqual(2, code)
+        self.assertEqual("unknown", result["error"]["outcome"])
+        self.assertFalse(result["error"]["retryable"])
+        self.assertEqual(
+            "outcome_unknown", result["data"]["results"]["dev-a"]["error_code"]
+        )
+
+    def test_cluster_health_check_preserves_unknown_outcome(self):
+        class FakeCluster:
+            client_errors = {}
+
+            @staticmethod
+            def execute_all(command, parallel, timeout):
+                return {
+                    "dev-a": SimpleNamespace(
+                        success=False,
+                        exit_code=-1,
+                        stdout="",
+                        stderr="command timed out",
+                        error_code="outcome_unknown",
+                        retryable=False,
+                        outcome="unknown",
+                    )
+                }
+
+        loader = FakeLoader([
+            ("dev-a", {"environment": "development", "tags": []}),
+        ])
+        stdout = io.StringIO()
+
+        with patch("ssh_cluster.SSHCluster.from_plan", return_value=FakeCluster()):
+            code = main(
+                [
+                    "health-command",
+                    "--hosts",
+                    "dev-a",
+                    "--apply",
+                    "--health-check",
+                ],
+                loader=loader,
+                stdout=stdout,
+            )
+
+        result = json.loads(stdout.getvalue())
+        self.assertEqual(2, code)
+        self.assertEqual("unknown", result["error"]["outcome"])
+        self.assertEqual(
+            "outcome_unknown", result["data"]["results"]["dev-a"]["error_code"]
+        )
 
 
 if __name__ == "__main__":

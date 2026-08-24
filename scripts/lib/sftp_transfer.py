@@ -21,6 +21,33 @@ except ImportError:
 
 
 CHUNK_SIZE = 128 * 1024  # 128KB 传输块（优化大文件传输性能）
+MAX_RESULT_ITEMS = 100
+
+
+def _bounded_items(values: list, limit: int = MAX_RESULT_ITEMS) -> list:
+    if len(values) <= limit:
+        return list(values)
+    head_count = (limit + 1) // 2
+    tail_count = limit // 2
+    return list(values[:head_count]) + list(values[-tail_count:])
+
+
+def _merge_bounded_items(
+    current: list,
+    incoming: list,
+    current_total: int,
+    incoming_total: int,
+    limit: int = MAX_RESULT_ITEMS,
+) -> list:
+    if current_total + incoming_total <= limit:
+        return list(current) + list(incoming)
+    head_count = (limit + 1) // 2
+    tail_count = limit // 2
+    head = list(current[:head_count])
+    if len(head) < head_count:
+        head.extend(incoming[:head_count - len(head)])
+    tail_source = list(current[-tail_count:]) + list(incoming[-tail_count:])
+    return head + tail_source[-tail_count:]
 
 
 @dataclass
@@ -83,6 +110,40 @@ class TransferResult:
     bytes_transferred: int = 0
     errors: List[str] = field(default_factory=list)
     details: List[Dict] = field(default_factory=list)
+    errors_total: int = 0
+    details_total: int = 0
+
+    def __post_init__(self):
+        self.errors_total = max(self.errors_total, len(self.errors))
+        self.details_total = max(self.details_total, len(self.details))
+        self.errors = _bounded_items(self.errors)
+        self.details = _bounded_items(self.details)
+
+    def merge(self, other: "TransferResult") -> None:
+        self.errors = _merge_bounded_items(
+            self.errors,
+            other.errors,
+            self.errors_total,
+            other.errors_total,
+        )
+        self.details = _merge_bounded_items(
+            self.details,
+            other.details,
+            self.details_total,
+            other.details_total,
+        )
+        self.errors_total += other.errors_total
+        self.details_total += other.details_total
+        self.bytes_transferred += other.bytes_transferred
+        self.files_transferred += other.files_transferred
+        self.files_failed += other.files_failed
+        self.success = self.success and other.success
+
+    def add_error(self, message: str) -> None:
+        self.errors = _merge_bounded_items(
+            self.errors, [message], self.errors_total, 1
+        )
+        self.errors_total += 1
 
     def to_dict(self) -> dict:
         return {
@@ -91,8 +152,12 @@ class TransferResult:
             'files_failed': self.files_failed,
             'bytes_transferred': self.bytes_transferred,
             'bytes_human': _human_size(self.bytes_transferred),
-            'errors': self.errors,
-            'details': self.details,
+            'errors': list(self.errors),
+            'details': list(self.details),
+            'errors_total': self.errors_total,
+            'details_total': self.details_total,
+            'errors_truncated': len(self.errors) < self.errors_total,
+            'details_truncated': len(self.details) < self.details_total,
         }
 
 
@@ -404,11 +469,7 @@ class SFTPTransfer:
 
                 file_result = self.upload_file(local_file, remote_file, resume=resume)
 
-                result.bytes_transferred += file_result.bytes_transferred
-                result.files_transferred += file_result.files_transferred
-                result.files_failed += file_result.files_failed
-                result.details.extend(file_result.details)
-                result.errors.extend(file_result.errors)
+                result.merge(file_result)
 
         if result.files_failed > 0:
             result.success = False
@@ -447,7 +508,7 @@ class SFTPTransfer:
         try:
             entries = self.sftp.listdir_attr(remote_dir)
         except Exception as e:
-            result.errors.append(f"无法列出目录 {remote_dir}: {e}")
+            result.add_error(f"无法列出目录 {remote_dir}: {e}")
             result.files_failed += 1
             return
 
@@ -460,11 +521,7 @@ class SFTPTransfer:
                 self._download_dir_recursive(remote_path, local_path, resume, result)
             else:
                 file_result = self.download_file(remote_path, local_path, resume=resume)
-                result.bytes_transferred += file_result.bytes_transferred
-                result.files_transferred += file_result.files_transferred
-                result.files_failed += file_result.files_failed
-                result.details.extend(file_result.details)
-                result.errors.extend(file_result.errors)
+                result.merge(file_result)
 
 
 def parallel_upload(sftp_factory: Callable, file_list: List[Tuple[str, str]],
@@ -501,11 +558,7 @@ def parallel_upload(sftp_factory: Callable, file_list: List[Tuple[str, str]],
 
         for future in as_completed(futures):
             file_result = future.result()
-            result.bytes_transferred += file_result.bytes_transferred
-            result.files_transferred += file_result.files_transferred
-            result.files_failed += file_result.files_failed
-            result.details.extend(file_result.details)
-            result.errors.extend(file_result.errors)
+            result.merge(file_result)
 
     if result.files_failed > 0:
         result.success = False
@@ -547,11 +600,7 @@ def parallel_download(sftp_factory: Callable, file_list: List[Tuple[str, str]],
 
         for future in as_completed(futures):
             file_result = future.result()
-            result.bytes_transferred += file_result.bytes_transferred
-            result.files_transferred += file_result.files_transferred
-            result.files_failed += file_result.files_failed
-            result.details.extend(file_result.details)
-            result.errors.extend(file_result.errors)
+            result.merge(file_result)
 
     if result.files_failed > 0:
         result.success = False

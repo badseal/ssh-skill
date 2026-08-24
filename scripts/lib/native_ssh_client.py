@@ -29,6 +29,9 @@ class SSHResult:
     stderr: str
     exit_code: int
     output: Dict[str, Any] = field(default_factory=dict)
+    error_code: str | None = None
+    retryable: bool | None = None
+    outcome: str | None = None
 
 
 def _bounded_ssh_result(
@@ -36,6 +39,10 @@ def _bounded_ssh_result(
     stdout: str | bytes,
     stderr: str | bytes,
     exit_code: int,
+    *,
+    error_code: str | None = None,
+    retryable: bool | None = None,
+    outcome: str | None = None,
 ) -> SSHResult:
     bounded_stdout = collect_text(stdout)
     bounded_stderr = collect_text(stderr)
@@ -48,6 +55,9 @@ def _bounded_ssh_result(
             "stdout": bounded_stdout.to_meta(),
             "stderr": bounded_stderr.to_meta(),
         },
+        error_code=error_code,
+        retryable=retryable,
+        outcome=outcome,
     )
 
 
@@ -174,6 +184,9 @@ class NativeSSHClient:
             result.stderr,
             result.exit_code,
             output=result.output,
+            error_code=result.error_code,
+            retryable=result.retryable,
+            outcome=result.outcome,
         )
 
     def upload(self, local_path: str, remote_path: str, timeout: Optional[int] = None, show_progress: bool = True) -> SSHResult:

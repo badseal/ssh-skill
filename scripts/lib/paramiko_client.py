@@ -10,6 +10,7 @@ import threading
 import time
 import os
 import re
+import socket
 from contextlib import nullcontext
 from typing import Optional, List, Union, Dict, Iterator, Any
 from dataclasses import dataclass, field
@@ -28,6 +29,9 @@ class SSHResult:
     stderr: str
     exit_code: int
     output: Dict[str, Any] = field(default_factory=dict)
+    error_code: str | None = None
+    retryable: bool | None = None
+    outcome: str | None = None
 
 
 def _bounded_ssh_result(
@@ -35,6 +39,10 @@ def _bounded_ssh_result(
     stdout: str | bytes,
     stderr: str | bytes,
     exit_code: int,
+    *,
+    error_code: str | None = None,
+    retryable: bool | None = None,
+    outcome: str | None = None,
 ) -> SSHResult:
     bounded_stdout = collect_text(stdout)
     bounded_stderr = collect_text(stderr)
@@ -47,6 +55,9 @@ def _bounded_ssh_result(
             "stdout": bounded_stdout.to_meta(),
             "stderr": bounded_stderr.to_meta(),
         },
+        error_code=error_code,
+        retryable=retryable,
+        outcome=outcome,
     )
 
 
@@ -623,6 +634,16 @@ class ParamikoClient:
                 stdout_bytes,
                 stderr_bytes,
                 exit_code,
+            )
+        except (TimeoutError, socket.timeout):
+            return SSHResult(
+                success=False,
+                stdout="",
+                stderr=f"Execution timeout after {self.timeout} seconds",
+                exit_code=-1,
+                error_code="outcome_unknown",
+                retryable=False,
+                outcome="unknown",
             )
         except Exception as e:
             return SSHResult(

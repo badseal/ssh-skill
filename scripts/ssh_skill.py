@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence, TextIO
@@ -14,6 +15,7 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPT_DIR / "lib"))
 
 from result_protocol import error_result, exit_code_for, success_result, write_result
+from output_limits import BoundedText
 from security import redact_sensitive
 
 
@@ -140,6 +142,61 @@ def _parse_json_output(stdout: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _forward_progress_line(line: bytes, stream: TextIO) -> bool:
+    try:
+        event = json.loads(line.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(event, dict) or event.get("type") != "progress":
+        return False
+    try:
+        stream.write(
+            json.dumps(
+                redact_sensitive(event), ensure_ascii=True, separators=(",", ":")
+            )
+            + "\n"
+        )
+        stream.flush()
+    except (OSError, UnicodeError, ValueError):
+        pass
+    return True
+
+
+def _run_legacy_process(command: list[str]) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        shell=False,
+    )
+    stdout_collector = BoundedText()
+    stderr_collector = BoundedText()
+
+    def read_stderr() -> None:
+        if process.stderr is None:
+            return
+        while True:
+            line = process.stderr.readline(64 * 1024)
+            if not line:
+                break
+            if not _forward_progress_line(line, sys.stderr):
+                stderr_collector.feed(line)
+
+    stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+    stderr_thread.start()
+    if process.stdout is not None:
+        for chunk in iter(lambda: process.stdout.read(64 * 1024), b""):
+            stdout_collector.feed(chunk)
+    return_code = process.wait()
+    stderr_thread.join()
+    return subprocess.CompletedProcess(
+        command,
+        return_code,
+        stdout_collector.finish().text,
+        stderr_collector.finish().text,
+    )
+
+
 def _legacy_subprocess_handler(
     operation: str,
     script_name: str,
@@ -150,15 +207,7 @@ def _legacy_subprocess_handler(
     command = [sys.executable, str(_SCRIPT_DIR / script_name), *arguments]
     if legacy_flag:
         command.append("--legacy-json")
-    completed = subprocess.run(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        shell=False,
-    )
+    completed = _run_legacy_process(command)
     parsed = _parse_json_output(completed.stdout) or _parse_json_output(completed.stderr)
     if parsed and parsed.get("schema_version") == "1.0":
         return parsed

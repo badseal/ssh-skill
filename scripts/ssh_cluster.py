@@ -36,6 +36,29 @@ from config_v3 import SSHConfigLoaderV3
 from result_protocol import error_result, exit_code_for, success_result, write_result
 
 
+def _execution_result_data(result) -> dict:
+    data = {
+        'success': result.success,
+        'exit_code': result.exit_code,
+        'stdout': result.stdout,
+        'stderr': result.stderr,
+    }
+    for key in ('error_code', 'retryable', 'outcome'):
+        value = getattr(result, key, None)
+        if value is not None:
+            data[key] = value
+    return data
+
+
+def _health_result_data(result) -> dict:
+    data = {'healthy': result.success}
+    for key in ('error_code', 'retryable', 'outcome'):
+        value = getattr(result, key, None)
+        if value is not None:
+            data[key] = value
+    return data
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -101,10 +124,15 @@ def main(
             return exit_code_for(result)
 
         if args.health_check:
-            health = cluster.health_check_all(
-                check_command=args.command,
+            health_results = cluster.execute_all(
+                args.command,
                 parallel=args.parallel,
                 timeout=args.timeout
+            )
+            health = {name: value.success for name, value in health_results.items()}
+            unknown = any(
+                getattr(value, 'outcome', None) == 'unknown'
+                for value in health_results.values()
             )
 
             result = success_result("cluster", {
@@ -113,9 +141,20 @@ def main(
                 'total': len(health),
                 'healthy': sum(1 for v in health.values() if v),
                 'unhealthy': sum(1 for v in health.values() if not v),
-                'results': {name: {'healthy': status} for name, status in health.items()},
+                'results': {
+                    name: _health_result_data(value)
+                    for name, value in health_results.items()
+                },
             })
-            if not all(health.values()):
+            if unknown:
+                result["success"] = False
+                result["error"] = {
+                    "code": "outcome_unknown",
+                    "message": "one or more health check outcomes are unavailable",
+                    "retryable": False,
+                    "outcome": "unknown",
+                }
+            elif not all(health.values()):
                 result["success"] = False
                 result["error"] = {
                     "code": "health_check_failed",
@@ -140,16 +179,23 @@ def main(
                 'successful': sum(1 for r in results.values() if r.success),
                 'failed': sum(1 for r in results.values() if not r.success),
                 'results': {
-                    name: {
-                        'success': result.success,
-                        'exit_code': result.exit_code,
-                        'stdout': result.stdout,
-                        'stderr': result.stderr
-                    }
-                    for name, result in results.items()
+                    name: _execution_result_data(value)
+                    for name, value in results.items()
                 },
             })
-            if not all(r.success for r in results.values()):
+            unknown = any(
+                getattr(value, 'outcome', None) == 'unknown'
+                for value in results.values()
+            )
+            if unknown:
+                result["success"] = False
+                result["error"] = {
+                    "code": "outcome_unknown",
+                    "message": "one or more cluster operation outcomes are unavailable",
+                    "retryable": False,
+                    "outcome": "unknown",
+                }
+            elif not all(r.success for r in results.values()):
                 result["success"] = False
                 result["error"] = {
                     "code": "cluster_operation_failed",

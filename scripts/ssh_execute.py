@@ -250,12 +250,17 @@ def direct_execute(alias, command, timeout):
     client.timeout = timeout
 
     result = client.execute(command)
-    return {
+    normalized = {
         'success': result.success,
         'exit_code': result.exit_code,
         'stdout': result.stdout,
-        'stderr': result.stderr
+        'stderr': result.stderr,
     }
+    for key in ('output', 'error_code', 'retryable', 'outcome'):
+        value = getattr(result, key, None)
+        if value is not None:
+            normalized[key] = value
+    return normalized
 
 
 def _normalize_exec_result(result, alias, command):
@@ -275,8 +280,10 @@ def _normalize_exec_result(result, alias, command):
         return success_result('exec', data)
     return error_result(
         'exec',
-        code='remote_command_failed',
+        code=result.get('error_code') or 'remote_command_failed',
         message=result.get('stderr') or 'remote command failed',
+        retryable=bool(result.get('retryable', False)),
+        outcome=result.get('outcome') or 'failed',
         data=data,
     )
 

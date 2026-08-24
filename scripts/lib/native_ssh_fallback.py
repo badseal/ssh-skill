@@ -210,7 +210,12 @@ def execute_native_ssh(
         'exit_code': result.exit_code,
         'stdout': result.stdout,
         'stderr': result.stderr,
-        'method': f'native_ssh_{platform_name}'
+        'method': f'native_ssh_{platform_name}',
+        'output': result.output,
+        'warnings': result.warnings,
+        'error_code': result.error_code,
+        'retryable': result.retryable,
+        'outcome': result.outcome,
     }
 
 

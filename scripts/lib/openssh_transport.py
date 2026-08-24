@@ -32,6 +32,9 @@ class TransportResult:
     exit_code: int
     output: dict[str, Any] = field(default_factory=dict)
     warnings: tuple[str, ...] = ()
+    error_code: str | None = None
+    retryable: bool | None = None
+    outcome: str | None = None
 
     @classmethod
     def from_completed_process(
@@ -42,13 +45,17 @@ class TransportResult:
     ) -> "TransportResult":
         stdout = collect_text(_decode(completed.stdout), limits)
         stderr = collect_text(_decode(completed.stderr), limits)
+        success = completed.returncode == 0
         return cls(
-            success=completed.returncode == 0,
+            success=success,
             stdout=stdout.text,
             stderr=stderr.text,
             exit_code=completed.returncode,
             output={"stdout": stdout.to_meta(), "stderr": stderr.to_meta()},
             warnings=warnings,
+            error_code=None if success else "remote_command_failed",
+            retryable=None if success else False,
+            outcome=None if success else "failed",
         )
 
 
@@ -120,6 +127,9 @@ def run_openssh(
             f"command timed out after {timeout} seconds",
             -1,
             warnings=policy.warnings,
+            error_code="outcome_unknown",
+            retryable=False,
+            outcome="unknown",
         )
     except OSError as exc:
         return TransportResult(
@@ -128,6 +138,9 @@ def run_openssh(
             f"OpenSSH execution failed: {exc}",
             -1,
             warnings=policy.warnings,
+            error_code="openssh_execution_failed",
+            retryable=False,
+            outcome="failed",
         )
     return TransportResult.from_completed_process(
         completed, limits=limits, warnings=policy.warnings

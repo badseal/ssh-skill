@@ -164,5 +164,5 @@ class ProgressEmitter:
             "percent": round(percent, 2),
             **extra,
         }
-        self.stream.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
+        self.stream.write(json.dumps(event, ensure_ascii=True, separators=(",", ":")) + "\n")
         self.stream.flush()

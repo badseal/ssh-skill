@@ -112,6 +112,19 @@ class OpenSSHTransportTests(unittest.TestCase):
         self.assertTrue(result.output["stdout"]["truncated"])
         self.assertTrue(result.stdout.endswith("TAIL"))
 
+    def test_timeout_marks_remote_outcome_unknown(self):
+        def runner(argv, **kwargs):
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+        result = run_openssh(
+            self.options, "example-host", "apply-change", None, 30, runner=runner
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual("outcome_unknown", result.error_code)
+        self.assertFalse(result.retryable)
+        self.assertEqual("unknown", result.outcome)
+
 
 if __name__ == "__main__":
     unittest.main()

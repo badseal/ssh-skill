@@ -21,6 +21,7 @@ from ssh_download import make_progress_callback as make_download_progress
 from ssh_upload import make_progress_callback as make_upload_progress
 from native_ssh_client import NativeSSHClient
 from paramiko_client import ParamikoClient
+from sftp_transfer import TransferResult
 
 
 class NonTerminal(io.StringIO):
@@ -102,6 +103,52 @@ class OutputLimitTests(unittest.TestCase):
         self.assertEqual("download", event["operation"])
         self.assertEqual(50, event["transferred_bytes"])
 
+    def test_progress_json_is_ascii_safe_for_non_ascii_paths(self):
+        stream = NonTerminal()
+        emitter = ProgressEmitter(stream, enabled=True, clock=lambda: 1.0)
+
+        emitter.emit("upload", 50, 100, file_path="测试/文件.bin")
+
+        stream.getvalue().encode("ascii")
+        self.assertEqual("测试/文件.bin", json.loads(stream.getvalue())["file_path"])
+
+    def test_transfer_result_limits_repeated_details_and_errors(self):
+        result = TransferResult(
+            success=False,
+            files_transferred=250,
+            files_failed=250,
+            details=[{"file": f"file-{index}"} for index in range(250)],
+            errors=[f"error-{index}" for index in range(250)],
+        ).to_dict()
+
+        self.assertLessEqual(len(result["details"]), 100)
+        self.assertLessEqual(len(result["errors"]), 100)
+        self.assertEqual(250, result["details_total"])
+        self.assertEqual(250, result["errors_total"])
+        self.assertTrue(result["details_truncated"])
+        self.assertTrue(result["errors_truncated"])
+
+    def test_transfer_result_merge_keeps_memory_bounded_and_totals_exact(self):
+        aggregate = TransferResult(success=True)
+
+        for index in range(250):
+            aggregate.merge(
+                TransferResult(
+                    success=False,
+                    files_failed=1,
+                    details=[{"file": f"file-{index}"}],
+                    errors=[f"error-{index}"],
+                )
+            )
+
+        result = aggregate.to_dict()
+        self.assertLessEqual(len(aggregate.details), 100)
+        self.assertLessEqual(len(aggregate.errors), 100)
+        self.assertEqual(250, result["details_total"])
+        self.assertEqual(250, result["errors_total"])
+        self.assertEqual("file-0", result["details"][0]["file"])
+        self.assertEqual("file-249", result["details"][-1]["file"])
+
     def test_paramiko_execute_bounds_stdout_and_stderr(self):
         class Channel:
             @staticmethod
@@ -136,6 +183,22 @@ class OutputLimitTests(unittest.TestCase):
         self.assertTrue(result.stdout.endswith("STDOUT-TAIL"))
         self.assertTrue(result.output["stdout"]["truncated"])
         self.assertTrue(result.output["stderr"]["truncated"])
+
+    def test_paramiko_execute_timeout_marks_remote_outcome_unknown(self):
+        class Connection:
+            @staticmethod
+            def exec_command(command, timeout):
+                raise TimeoutError("timed out")
+
+        client = ParamikoClient("example.invalid", "user", key_file="example-key")
+        client._get_connection = lambda: Connection()
+
+        result = client.execute("apply-change")
+
+        self.assertFalse(result.success)
+        self.assertEqual("outcome_unknown", result.error_code)
+        self.assertFalse(result.retryable)
+        self.assertEqual("unknown", result.outcome)
 
     def test_native_scp_failure_output_is_bounded(self):
         completed = subprocess.CompletedProcess(

@@ -7,12 +7,13 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from tests import support  # noqa: F401
 from result_protocol import success_result
-from ssh_execute import main as execute_main
+from ssh_execute import _normalize_exec_result, direct_execute, main as execute_main
 from ssh_skill import delegate_legacy_entrypoint
 
 
@@ -79,6 +80,47 @@ class LegacyEntrypointTests(unittest.TestCase):
         result = json.loads(stdout.getvalue())
         self.assertEqual("1.0", result["schema_version"])
         self.assertEqual("invalid_arguments", result["error"]["code"])
+
+    def test_direct_timeout_metadata_survives_normalization(self):
+        class Client:
+            timeout = 30
+
+            @staticmethod
+            def execute(command):
+                return SimpleNamespace(
+                    success=False,
+                    exit_code=-1,
+                    stdout="",
+                    stderr="command timed out",
+                    output={},
+                    error_code="outcome_unknown",
+                    retryable=False,
+                    outcome="unknown",
+                )
+
+        class Loader:
+            @staticmethod
+            def load_ssh_config(alias):
+                return {}
+
+            @staticmethod
+            def load_metadata(alias):
+                return {}
+
+            @staticmethod
+            def from_alias(alias):
+                return Client()
+
+        with patch("config_v3.SSHConfigLoaderV3", return_value=Loader()), patch(
+            "native_ssh_fallback.should_use_native_ssh", return_value=(False, "")
+        ):
+            raw = direct_execute("example-host", "apply-change", 30)
+
+        result = _normalize_exec_result(raw, "example-host", "apply-change")
+
+        self.assertEqual("outcome_unknown", result["error"]["code"])
+        self.assertFalse(result["error"]["retryable"])
+        self.assertEqual("unknown", result["error"]["outcome"])
 
     def test_legacy_delegate_uses_unified_cli_unless_flag_is_explicit(self):
         calls = []

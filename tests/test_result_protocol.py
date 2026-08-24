@@ -6,6 +6,7 @@ import unittest
 
 from tests import support  # noqa: F401
 from result_protocol import (
+    MAX_RESULT_BYTES,
     error_result,
     exit_code_for,
     success_result,
@@ -71,6 +72,26 @@ class ResultProtocolTests(unittest.TestCase):
 
         self.assertTrue(stream.getvalue().isascii())
         self.assertEqual(result, json.loads(stream.getvalue()))
+
+    def test_write_result_bounds_large_nested_envelope(self):
+        stream = io.StringIO()
+        result = success_result(
+            "cluster",
+            {
+                "results": {
+                    f"host-{index:04d}": {"stdout": "x" * 4096, "stderr": ""}
+                    for index in range(200)
+                }
+            },
+        )
+
+        write_result(result, stream=stream)
+
+        encoded = stream.getvalue().encode("utf-8")
+        self.assertLessEqual(len(encoded), MAX_RESULT_BYTES + 1)
+        parsed = json.loads(stream.getvalue())
+        self.assertTrue(parsed["meta"]["output"]["truncated"])
+        self.assertGreater(parsed["meta"]["output"]["total_bytes"], MAX_RESULT_BYTES)
 
     def test_invalid_outcome_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "outcome"):
