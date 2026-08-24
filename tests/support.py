@@ -11,4 +11,3 @@ LIB = SCRIPTS / "lib"
 for path in (str(SCRIPTS), str(LIB)):
     if path not in sys.path:
         sys.path.insert(0, path)
-
