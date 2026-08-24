@@ -4,11 +4,13 @@ from __future__ import annotations
 import argparse
 import ast
 from dataclasses import dataclass
+import io
 import json
 from pathlib import Path
 import re
 import subprocess
 import sys
+import tokenize
 from typing import Iterable, Sequence, TextIO
 from urllib.parse import unquote, urlparse
 
@@ -260,6 +262,34 @@ class _RuntimeVisitor(ast.NodeVisitor):
             )
 
 
+def _uses_python_312_fstring_grammar(source: str) -> bool:
+    fstring_start = getattr(tokenize, "FSTRING_START", None)
+    fstring_middle = getattr(tokenize, "FSTRING_MIDDLE", None)
+    fstring_end = getattr(tokenize, "FSTRING_END", None)
+    if fstring_start is None:
+        return False
+
+    fstring_depth = 0
+    expression_depth = 0
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if token.type == fstring_start:
+            fstring_depth += 1
+            continue
+        if token.type == fstring_end:
+            fstring_depth -= 1
+            continue
+        if not fstring_depth or token.type == fstring_middle:
+            continue
+        if token.type == tokenize.OP:
+            if token.string == "{":
+                expression_depth += 1
+            elif token.string == "}" and expression_depth:
+                expression_depth -= 1
+        if expression_depth and "\\" in token.string:
+            return True
+    return False
+
+
 def _validate_runtime_patterns(root: Path) -> list[ValidationIssue]:
     issues = []
     scripts = root / "scripts"
@@ -269,14 +299,23 @@ def _validate_runtime_patterns(root: Path) -> list[ValidationIssue]:
         if path.name == "validate_release.py" or "__pycache__" in path.parts:
             continue
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        except (OSError, SyntaxError) as exc:
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=str(path))
+        except (OSError, SyntaxError, tokenize.TokenError) as exc:
             issues.append(
                 ValidationIssue(
                     "python_syntax_error", _relative(root, path), f"{type(exc).__name__}: parse failed"
                 )
             )
             continue
+        if _uses_python_312_fstring_grammar(source):
+            issues.append(
+                ValidationIssue(
+                    "python_syntax_error",
+                    _relative(root, path),
+                    "f-string expression contains a backslash and requires Python 3.12+",
+                )
+            )
         visitor = _RuntimeVisitor(root, path)
         visitor.visit(tree)
         issues.extend(visitor.issues)

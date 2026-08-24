@@ -59,6 +59,24 @@ class ReleaseValidationTests(unittest.TestCase):
 
         self.assertEqual([], issues)
 
+    def test_validator_rejects_fstring_backslash_for_python_310(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            scripts = root / "scripts"
+            scripts.mkdir()
+            (scripts / "future_syntax.py").write_text(
+                "def stream(line):\n"
+                "    yield f\"[STDERR] {line.rstrip('\\n')}\"\n",
+                encoding="utf-8",
+            )
+
+            issues = validate_release(root, check_cli_help=False)
+
+        self.assertIn(
+            ("python_syntax_error", "scripts/future_syntax.py"),
+            {(issue.code, issue.path) for issue in issues},
+        )
+
     def test_cli_emits_one_json_document(self):
         stdout = io.StringIO()
 
