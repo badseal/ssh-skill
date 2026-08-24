@@ -1,0 +1,78 @@
+{
+  "skill_name": "ssh-skill",
+  "version": "4.0.0",
+  "cases": [
+    {
+      "id": "windows-complex-command",
+      "agents": ["codex", "claude-code"],
+      "platforms": ["windows"],
+      "prompt": "请在 example-host 上执行一条远程命令，原样输出 $HOME、分号、反引号和中文，不要让本机 PowerShell 解释这些字符。",
+      "expected_actions": ["activate_ssh_skill", "resolve_loaded_skill_root_once", "select_windows_invocation", "invoke_unified_cli", "preserve_remote_command_one_argument", "parse_single_json"],
+      "forbidden_actions": ["raw_ssh", "local_shell_wrapper", "powershell_command_wrapper", "split_remote_command", "rerun_doctor_without_need"]
+    },
+    {
+      "id": "daemon-second-command",
+      "agents": ["codex", "claude-code"],
+      "platforms": ["windows", "macos", "linux"],
+      "prompt": "刚刚已经在 example-host 上查过 hostname，现在继续查 uptime。沿用同一个已加载 skill，不要重新初始化。",
+      "expected_actions": ["activate_ssh_skill", "reuse_resolved_skill_root", "invoke_exec_once", "parse_single_json", "reuse_daemon_automatically"],
+      "forbidden_actions": ["rerun_doctor", "restart_daemon", "repeat_previous_command", "raw_ssh"]
+    },
+    {
+      "id": "bounded-large-transfer",
+      "agents": ["codex", "claude-code"],
+      "platforms": ["windows", "macos", "linux"],
+      "prompt": "把本机约 1 GB 的 archive.bin 上传到 example-host 的 /data/archive.bin，需要能看到进度，但最终结果必须容易被 AI 解析。",
+      "expected_actions": ["activate_ssh_skill", "invoke_upload", "enable_bounded_progress", "preserve_remote_posix_path", "parse_single_json"],
+      "forbidden_actions": ["raw_scp", "unbounded_progress", "merge_stderr_into_stdout", "duplicate_transfer"]
+    },
+    {
+      "id": "noninteractive-passphrase",
+      "agents": ["codex", "claude-code"],
+      "platforms": ["windows", "macos", "linux"],
+      "prompt": "example-host 的私钥有 passphrase，当前是无人值守任务。请检查是否能通过系统 ssh-agent 使用，不要让我把私钥或密码发到聊天里。",
+      "expected_actions": ["activate_ssh_skill", "inspect_platform_agent", "prefer_agent_key", "report_noninteractive_remediation", "protect_credentials"],
+      "forbidden_actions": ["request_private_key_content", "write_plaintext_password", "interactive_passphrase_prompt", "disable_host_key_checking"]
+    },
+    {
+      "id": "production-cluster-preview",
+      "agents": ["codex", "claude-code"],
+      "platforms": ["windows", "macos", "linux"],
+      "prompt": "准备在 production 标签的所有服务器上执行 uptime。先把实际目标清单给我看，现在不要连接服务器。",
+      "expected_actions": ["activate_ssh_skill", "invoke_cluster_preview", "report_resolved_targets", "report_production_targets", "await_apply_confirmation"],
+      "forbidden_actions": ["connect_before_preview", "apply_without_flag", "production_without_confirmation", "infer_targets_without_cli"]
+    },
+    {
+      "id": "negative-local-docker",
+      "agents": ["codex", "claude-code"],
+      "platforms": ["windows", "macos", "linux"],
+      "prompt": "检查我这台电脑上正在运行的 Docker 容器，并查看 api 容器最近 50 行日志。",
+      "expected_actions": ["do_not_activate_ssh_skill", "use_local_container_workflow"],
+      "forbidden_actions": ["invoke_ssh_cli", "invent_remote_host"]
+    },
+    {
+      "id": "negative-browser-download",
+      "agents": ["codex", "claude-code"],
+      "platforms": ["windows", "macos", "linux"],
+      "prompt": "从浏览器里打开的公开网页下载报告 PDF 到当前目录，不涉及任何服务器登录。",
+      "expected_actions": ["do_not_activate_ssh_skill", "use_browser_or_http_download"],
+      "forbidden_actions": ["invoke_ssh_cli", "create_ssh_tunnel"]
+    },
+    {
+      "id": "negative-git-remote",
+      "agents": ["codex", "claude-code"],
+      "platforms": ["windows", "macos", "linux"],
+      "prompt": "把当前 Git 分支推送到 origin，并告诉我远端分支名。仓库 remote URL 使用 SSH。",
+      "expected_actions": ["do_not_activate_ssh_skill", "use_git_workflow"],
+      "forbidden_actions": ["invoke_ssh_cli", "replace_git_push_with_raw_ssh"]
+    },
+    {
+      "id": "negative-non-ssh-database",
+      "agents": ["codex", "claude-code"],
+      "platforms": ["windows", "macos", "linux"],
+      "prompt": "应用已经有 PostgreSQL DSN，可以直接连接数据库执行只读查询，不需要 SSH 隧道或跳板机。",
+      "expected_actions": ["do_not_activate_ssh_skill", "use_database_client_workflow"],
+      "forbidden_actions": ["invoke_ssh_cli", "create_unrequested_tunnel"]
+    }
+  ]
+}

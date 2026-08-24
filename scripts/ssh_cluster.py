@@ -26,13 +26,45 @@ import sys
 import os
 import json
 import argparse
+from typing import Sequence, TextIO
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lib'))
 
 from cluster import SSHCluster
+from cluster_plan import ConfirmationRequired, resolve_cluster_plan, validate_cluster_apply
+from config_v3 import SSHConfigLoaderV3
+from result_protocol import error_result, exit_code_for, success_result, write_result
 
 
-def main():
+def _execution_result_data(result) -> dict:
+    data = {
+        'success': result.success,
+        'exit_code': result.exit_code,
+        'stdout': result.stdout,
+        'stderr': result.stderr,
+    }
+    for key in ('error_code', 'retryable', 'outcome'):
+        value = getattr(result, key, None)
+        if value is not None:
+            data[key] = value
+    return data
+
+
+def _health_result_data(result) -> dict:
+    data = {'healthy': result.success}
+    for key in ('error_code', 'retryable', 'outcome'):
+        value = getattr(result, key, None)
+        if value is not None:
+            data[key] = value
+    return data
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    loader=None,
+    stdout: TextIO = sys.stdout,
+) -> int:
     parser = argparse.ArgumentParser(description='SSH批量操作工具 v3.0')
     parser.add_argument('command', help='要执行的命令')
     parser.add_argument('--hosts', help='指定别名列表（逗号分隔）')
@@ -42,46 +74,96 @@ def main():
     parser.add_argument('--timeout', type=int, help='超时时间（秒）')
     parser.add_argument('--health-check', action='store_true', help='健康检查模式')
     parser.add_argument('--max-workers', type=int, default=10, help='最大并发数')
+    parser.add_argument('--apply', action='store_true', help='确认执行远程操作')
+    parser.add_argument('--confirm-production', action='store_true',
+                        help='二次确认允许操作生产目标')
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     try:
-        # 解析参数
         aliases = args.hosts.split(',') if args.hosts else None
         tags = args.tags.split(',') if args.tags else None
 
-        # 加载集群
-        cluster = SSHCluster.from_ssh_config(
-            aliases=aliases,
-            environment=args.environment,
-            tags=tags,
-            max_workers=args.max_workers
-        )
+        loader = loader or SSHConfigLoaderV3()
+        plan = resolve_cluster_plan(loader, aliases, args.environment, tags)
+        plan_data = plan.to_dict()
 
-        if not cluster.clients:
-            print(json.dumps({
-                'success': False,
-                'error': 'No servers matched the filter criteria'
-            }, ensure_ascii=True, indent=2), file=sys.stderr)
-            sys.exit(1)
+        if not args.apply:
+            write_result(
+                success_result("cluster", {"mode": "preview", **plan_data}),
+                stream=stdout,
+            )
+            return 0
+
+        validate_cluster_apply(plan, args.apply, args.confirm_production)
+        if not plan.targets:
+            result = error_result(
+                "cluster",
+                code="no_targets",
+                message="no servers matched the filter criteria",
+                data={"mode": "apply", **plan_data},
+            )
+            write_result(result, stream=stdout)
+            return exit_code_for(result)
+
+        cluster = SSHCluster.from_plan(
+            plan, loader=loader, max_workers=args.max_workers
+        )
+        if cluster.client_errors:
+            result = error_result(
+                "cluster",
+                code="client_creation_failed",
+                message="one or more target configurations could not create clients",
+                data={
+                    "mode": "apply",
+                    **plan_data,
+                    "client_errors": dict(sorted(cluster.client_errors.items())),
+                },
+            )
+            write_result(result, stream=stdout)
+            return exit_code_for(result)
 
         if args.health_check:
-            health = cluster.health_check_all(
-                check_command=args.command,
+            health_results = cluster.execute_all(
+                args.command,
                 parallel=args.parallel,
                 timeout=args.timeout
             )
+            health = {name: value.success for name, value in health_results.items()}
+            unknown = any(
+                getattr(value, 'outcome', None) == 'unknown'
+                for value in health_results.values()
+            )
 
-            output = {
-                'success': True,
+            result = success_result("cluster", {
+                "mode": "apply",
+                **plan_data,
                 'total': len(health),
                 'healthy': sum(1 for v in health.values() if v),
                 'unhealthy': sum(1 for v in health.values() if not v),
-                'results': {name: {'healthy': status} for name, status in health.items()}
-            }
-
-            print(json.dumps(output, ensure_ascii=True, indent=2))
-            sys.exit(0 if all(health.values()) else 1)
+                'results': {
+                    name: _health_result_data(value)
+                    for name, value in health_results.items()
+                },
+            })
+            if unknown:
+                result["success"] = False
+                result["error"] = {
+                    "code": "outcome_unknown",
+                    "message": "one or more health check outcomes are unavailable",
+                    "retryable": False,
+                    "outcome": "unknown",
+                }
+            elif not all(health.values()):
+                result["success"] = False
+                result["error"] = {
+                    "code": "health_check_failed",
+                    "message": "one or more health checks failed",
+                    "retryable": False,
+                    "outcome": "failed",
+                }
+            write_result(result, stream=stdout)
+            return exit_code_for(result)
 
         else:
             results = cluster.execute_all(
@@ -90,32 +172,57 @@ def main():
                 timeout=args.timeout
             )
 
-            output = {
-                'success': all(r.success for r in results.values()),
+            result = success_result("cluster", {
+                "mode": "apply",
+                **plan_data,
                 'total': len(results),
                 'successful': sum(1 for r in results.values() if r.success),
                 'failed': sum(1 for r in results.values() if not r.success),
                 'results': {
-                    name: {
-                        'success': result.success,
-                        'exit_code': result.exit_code,
-                        'stdout': result.stdout,
-                        'stderr': result.stderr
-                    }
-                    for name, result in results.items()
+                    name: _execution_result_data(value)
+                    for name, value in results.items()
+                },
+            })
+            unknown = any(
+                getattr(value, 'outcome', None) == 'unknown'
+                for value in results.values()
+            )
+            if unknown:
+                result["success"] = False
+                result["error"] = {
+                    "code": "outcome_unknown",
+                    "message": "one or more cluster operation outcomes are unavailable",
+                    "retryable": False,
+                    "outcome": "unknown",
                 }
-            }
+            elif not all(r.success for r in results.values()):
+                result["success"] = False
+                result["error"] = {
+                    "code": "cluster_operation_failed",
+                    "message": "one or more cluster operations failed",
+                    "retryable": False,
+                    "outcome": "failed",
+                }
+            write_result(result, stream=stdout)
+            return exit_code_for(result)
 
-            print(json.dumps(output, ensure_ascii=True, indent=2))
-            sys.exit(0 if all(r.success for r in results.values()) else 1)
+    except ConfirmationRequired as exc:
+        result = error_result(
+            "cluster",
+            code="confirmation_required",
+            message=str(exc),
+            data={"mode": "preview", **locals().get("plan_data", {})},
+        )
+        write_result(result, stream=stdout)
+        return exit_code_for(result)
 
     except Exception as e:
-        print(json.dumps({
-            'success': False,
-            'error': str(e)
-        }, ensure_ascii=True, indent=2), file=sys.stderr)
-        sys.exit(1)
+        result = error_result(
+            "cluster", code="cluster_error", message=str(e), retryable=False
+        )
+        write_result(result, stream=stdout)
+        return exit_code_for(result)
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

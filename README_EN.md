@@ -1,419 +1,204 @@
-# SSH Skill - High-Performance SSH Operations Tool
+# SSH Skill v4.0.0
 
 [中文](README.md) | **English**
 
-> Enterprise-grade SSH management tool for Codex / Claude Code, making remote server operations as simple and efficient as local ones
+`ssh-skill` is an SSH workflow skill for Codex and Claude Code. Its unified
+Python CLI handles remote execution, file transfer, server-to-server transfer,
+clusters, SSH configuration, tunnels, and connection daemons with one result
+contract across Windows, macOS, and Linux.
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+**Current stable primary version: v4.0.0.** New AI calls use the unified
+entrypoint and v4 result contract. Legacy scripts remain migration shims only.
 
-## 📢 Recent Updates
+## What Changed In v4
 
-### v3.3.1 - Codex Metadata Compatibility Fix (2026-05-01)
+- Every new call enters through `scripts/ssh_skill.py`.
+- stdout contains one `schema_version=1.0` JSON document.
+- Remote command text is passed as one argument without local PowerShell,
+  Bash, or Zsh evaluation.
+- OpenSSH, Paramiko, and cluster execution timeouts after dispatch return
+  `outcome_unknown` with `retryable=false`, preventing AI replay of side effects.
+- The unified entrypoint can stream bounded JSONL progress on stderr. Events use
+  ASCII-safe JSON for reliable parsing on Windows and the other desktop OSes.
+- Top-level JSON results are limited to 256 KiB. Recursive transfer details keep
+  at most 100 head/tail samples while preserving the actual total count.
+- Host-key checking defaults to `accept-new`; known-key conflicts are rejected.
+- Cluster calls preview by default. Execution requires `--apply`, and production
+  targets also require `--confirm-production`.
+- New plaintext passwords are rejected; legacy passwords are read-only and
+  always redacted.
+- Agent forwarding is disabled by default.
+- Legacy filenames remain migration entrypoints but inherit v4 safety behavior.
 
-- 🧩 **Codex compatibility**: Shortened the `SKILL.md` frontmatter `description` to stay below Codex's 1024-character limit and prevent skill loading failures
-- 🛡️ **Trigger semantics preserved**: Kept the critical SSH/server operations trigger, raw `ssh/scp` prohibition, and core server/jump-host/transfer/tunnel/database/internal-access keywords
+## Compatibility
 
-### v3.3 - Windows Native SSH Adaptation & Passphrase Key Support (2026-03-24)
+| AI tool | Windows | macOS | Linux |
+| --- | --- | --- | --- |
+| Codex | Supported | Supported | Supported |
+| Claude Code | Supported | Supported | Supported |
 
-- 🔑 **Full Passphrase Key Support**: Seamless passphrase-protected key usage through Windows SSH Agent integration — no interactive password input needed
-- 🪟 **Windows Native SSH Adaptation**: Auto-locates `%SystemRoot%\System32\OpenSSH\ssh.exe`, resolving PATH priority conflicts between Git SSH and Windows native SSH
-- 🔌 **SSH Tunnel Management**: Local port forwarding with daemon mode, auto-reconnect, heartbeat detection — easy access to remote databases and internal services
-- 🛡️ **Windows SSH Agent Tool**: One-click detection, startup, and configuration of the Windows OpenSSH Authentication Agent service
+The release matrix covers Python 3.10, 3.11, 3.12, and 3.13. Runtime
+dependencies are Python, an OpenSSH client, and Paramiko. Python 3.8/3.9 are
+best-effort only and are not release gates.
+The v4.0.0 release baseline is 115 offline tests, verified by GitHub Actions on
+Windows, macOS, Ubuntu, and Python 3.10-3.13.
 
-## ✨ Core Features
+## Skill Root
 
-### 🚀 Ultimate Performance
+Treat the directory containing the [loaded SKILL.md](SKILL.md) as
+`<SSH_SKILL_ROOT>`. No one directory is the universally correct installation
+path.
 
-**Daemon Long-Connection Mode** - Industry-leading performance optimization
+Common candidates include:
 
-| Mode | Single Command | 10 Commands | 30 Commands | Performance Gain |
-|------|---------------|-------------|-------------|-----------------|
-| Traditional Direct | ~0.45s | ~4.5s | ~13.5s | - |
-| **Daemon Mode** | **~0.12s** | **~1.2s** | **~3.6s** | **🔥 3.75x** |
+- Codex user scope: `$CODEX_HOME/skills/ssh-skill/` or `.agents/skills/ssh-skill/`
+- Codex project scope: `.codex/skills/ssh-skill/` or `.agents/skills/ssh-skill/`
+- Claude Code user or project scope: `.claude/skills/ssh-skill/`
 
-- Auto-start daemon on first connection
-- Multiple Claude Code instances share connections
-- Automatic heartbeat detection and reconnection
-- Auto-exit after 30 minutes idle
+`doctor` reports versions and content hashes for the current and candidate
+copies. It never copies, overwrites, or silently selects another copy. Resolve
+the root once per task; do not run doctor before each operation.
 
-### 📊 Smart Large File Transfer
+## Platform Invocation
 
-**Automatic Transfer Mode Switching** - Intelligently selects optimal solution based on file size
+Windows PowerShell:
 
+```powershell
+python "<SSH_SKILL_ROOT>\scripts\ssh_skill.py" doctor --json
+python "<SSH_SKILL_ROOT>\scripts\ssh_skill.py" exec example-host "hostname"
 ```
-File size ≤ 80MB  →  Native SCP (fast completion)
-File size > 80MB  →  Paramiko SFTP (real-time progress)
+
+macOS / Linux:
+
+```bash
+python3 "<SSH_SKILL_ROOT>/scripts/ssh_skill.py" doctor --json
+python3 "<SSH_SKILL_ROOT>/scripts/ssh_skill.py" exec example-host "hostname"
 ```
 
-**Real-time Progress Display**:
+Remote paths remain POSIX paths on all three systems. Do not add a local shell
+wrapper.
+
+## Common Commands
+
+These examples assume the current directory is the source root:
+
+```text
+python scripts/ssh_skill.py doctor --json
+python scripts/ssh_skill.py config list-servers
+python scripts/ssh_skill.py exec example-host "uname -a"
+python scripts/ssh_skill.py upload example-host ./app.tar.gz /tmp/app.tar.gz
+python scripts/ssh_skill.py download example-host /var/log/app.log ./app.log
+python scripts/ssh_skill.py transfer source-host /data/file destination-host /backup/file
+python scripts/ssh_skill.py tunnel start example-host --remote-port 5432
+```
+
+See [references/commands.md](references/commands.md) for full syntax.
+
+## Cluster Confirmation Gate
+
+Preview without opening an SSH connection:
+
+```text
+python scripts/ssh_skill.py cluster "uptime" --environment production
+```
+
+Apply after reviewing the targets:
+
+```text
+python scripts/ssh_skill.py cluster "uptime" --environment production --apply --confirm-production
+```
+
+Do not infer actual scope from filters. Review `targets`, `target_count`, and
+`production_targets` before applying.
+
+## Result Protocol
+
+Success and failure use one envelope:
+
 ```json
 {
-  "file": "large-file.iso",
-  "total": 310984990,
-  "transferred": 155492495,
-  "percent": 50.0,
-  "speed": "2.1 MB/s",
-  "eta": 74.2
+  "schema_version": "1.0",
+  "success": true,
+  "operation": "exec",
+  "data": {},
+  "error": null,
+  "meta": {
+    "request_id": null,
+    "platform": "windows",
+    "transport": "openssh",
+    "elapsed_ms": 120,
+    "warnings": []
+  }
 }
 ```
 
-**Smart Timeout Calculation**:
-- Auto-calculate timeout based on file size
-- Formula: `File size(MB) ÷ 1MB/s + 60s buffer`
-- Range: 60 seconds - 3600 seconds (1 hour)
+When `error.code=outcome_unknown`, the command may have executed remotely.
+Preserve the request ID, stop automatic retry, and use a separate read-only
+check to verify state.
 
-**Transfer Optimization**:
-- Block size: 128KB (4x performance boost)
-- Resume support
-- No timeout limit (large files)
-- Recursive directory upload/download
+The top-level stdout result is capped at 256 KiB. Recursive transfer results
+retain at most 100 head/tail samples while fields such as `total_files` preserve
+the actual scale. Explicit real-time progress is emitted as separate ASCII-safe
+JSONL on stderr and must not be merged into stdout.
 
-### 🌐 Server-to-Server Direct Transfer
+## Safety Boundary
 
-**Zero Local Bandwidth Consumption** - Data transfers directly between servers
+- Do not construct raw `ssh`, `scp`, `sftp`, or `rsync` commands.
+- Do not disable host-key checking or discard `known_hosts` in routine use.
+- Do not emit passwords, private keys, tokens, or askpass data.
+- Do not connect to a multi-host target set before preview.
+- Do not apply production cluster work or config deletion without confirmation.
+- Do not repeat a mutation merely because output was truncated.
 
-```bash
-# Auto mode (recommended) - intelligently selects optimal method
-ssh_server_transfer.py source-server /data/backup.tar.gz target-server /backup/
+See [references/safety.md](references/safety.md) for the full contract.
 
-# Direct mode - recommended for large files (data doesn't go through local)
-ssh_server_transfer.py source-server /data/large.iso target-server /data/ --mode direct
+## Legacy Entrypoint Migration
 
-# Support rsync incremental sync
-ssh_server_transfer.py source-server /data/ target-server /backup/ --use-rsync
+`ssh_execute.py`, `ssh_upload.py`, `ssh_download.py`,
+`ssh_server_transfer.py`, `ssh_config_manager_v3.py`, `ssh_tunnel.py`, and
+`ssh_daemon.py` remain available. Their default output is the v4 envelope.
+
+Use `--legacy-json` only for an identified old consumer. It converts result
+fields but does not restore unsafe host-key, retry, unbounded-output, or cluster
+behavior.
+
+## Offline Local Verification
+
+These help commands make no server connection and are executed by tests:
+
+```text
+python scripts/ssh_skill.py --help
+python scripts/ssh_skill.py exec --help
+python scripts/ssh_skill.py upload --help
+python scripts/ssh_skill.py download --help
+python scripts/ssh_skill.py transfer --help
+python scripts/ssh_skill.py cluster --help
+python scripts/ssh_skill.py config --help
+python scripts/ssh_skill.py tunnel --help
+python scripts/ssh_skill.py daemon --help
+python scripts/ssh_skill.py doctor --help
 ```
 
-**Transfer Mode Comparison**:
+Run the complete suite:
 
-| Mode | Data Flow | Use Case | Advantages |
-|------|-----------|----------|-----------|
-| Direct | Source → Target | Large files, servers connected | Fast, no local bandwidth |
-| Stream | Source → Local → Target | Small files, network issues | No server-to-server config needed |
-| Hybrid | Try direct first, fallback to stream | Uncertain environment | Auto-adaptive |
-| Auto | Smart decision | Default | Optimal choice |
-
-### 🎯 Jump Host Support
-
-**Multi-level Jump Host Auto-handling** - Using standard ProxyJump
-
-```ssh-config
-Host internal-server
-    HostName 10.0.1.100
-    User appuser
-    ProxyJump bastion1,bastion2
+```text
+python -m unittest discover -s tests -v
 ```
 
-AI only needs to know the `internal-server` alias, multi-level jumping is handled automatically.
+Current v4.0.0 release baseline: `115 tests passed`.
 
-### 🔧 Unified Configuration Management
+Automated tests do not connect to real servers. Real SSH smoke tests, installed
+copy synchronization, push, tags, and releases are separately approved steps.
 
-**Based on Standard OpenSSH Config** - Compatible with all SSH tools
+## Documentation
 
-```bash
-# List all servers
-ssh_config_manager_v3.py list-servers
+- AI contract: [SKILL.md](SKILL.md)
+- Commands: [references/commands.md](references/commands.md)
+- Windows: [references/platforms-windows.md](references/platforms-windows.md)
+- macOS: [references/platforms-macos.md](references/platforms-macos.md)
+- Linux: [references/platforms-linux.md](references/platforms-linux.md)
+- Safety: [references/safety.md](references/safety.md)
 
-# Find servers
-ssh_config_manager_v3.py find "web"
-
-# Create configuration
-ssh_config_manager_v3.py create --alias prod-web-01 --host 192.168.1.100 --user root
-
-# Update configuration
-ssh_config_manager_v3.py update prod-web-01 --description "Production Web Server"
-```
-
-**Metadata Support**:
-- Environment tags (production/development/staging)
-- Location information
-- Custom tags
-- Creation/update timestamps
-
-### ⚡ Batch Concurrent Operations
-
-**Execute commands on multiple servers concurrently**
-
-```bash
-# Execute on all servers
-ssh_cluster.py "uptime" --parallel
-
-# Filter by environment
-ssh_cluster.py "systemctl status nginx" --environment production --parallel
-
-# Filter by tags
-ssh_cluster.py "df -h" --tags "web,nginx" --parallel --max-workers 10
-```
-
-## 📦 Installation
-
-### Dependencies
-
-```bash
-pip install paramiko
-```
-
-### Configuration
-
-1. For Codex: place the `ssh-skill` directory under `C:\Users\<username>\.agents\skills\ssh-skill\` or your active Codex skills directory.
-2. For Claude Code: place the `ssh-skill` directory under `~/.claude/skills/ssh-skill/`.
-3. Configure SSH key or password authentication.
-4. Start using.
-
-## 🎬 Quick Start
-
-### Execute Remote Commands
-
-```bash
-python ~/.claude/skills/ssh-skill/scripts/ssh_execute.py prod-web-01 "systemctl status nginx"
-```
-
-### Upload Files
-
-```bash
-# Small files (fast)
-MSYS_NO_PATHCONV=1 python ~/.claude/skills/ssh-skill/scripts/ssh_upload.py prod-web-01 ./app.tar.gz /tmp/
-
-# Large files (auto progress display)
-MSYS_NO_PATHCONV=1 python ~/.claude/skills/ssh-skill/scripts/ssh_upload.py prod-web-01 ./large-file.iso /tmp/
-
-# Resume support
-MSYS_NO_PATHCONV=1 python ~/.claude/skills/ssh-skill/scripts/ssh_upload.py prod-web-01 ./large-file.iso /tmp/ --resume
-
-# Recursive directory upload
-MSYS_NO_PATHCONV=1 python ~/.claude/skills/ssh-skill/scripts/ssh_upload.py prod-web-01 ./dist/ /var/www/html/ --recursive
-```
-
-### Download Files
-
-```bash
-MSYS_NO_PATHCONV=1 python ~/.claude/skills/ssh-skill/scripts/ssh_download.py prod-web-01 /var/log/app.log ./app.log
-```
-
-### Server-to-Server Transfer
-
-```bash
-MSYS_NO_PATHCONV=1 python ~/.claude/skills/ssh-skill/scripts/ssh_server_transfer.py source-server /data/backup.tar.gz target-server /backup/
-```
-
-## 🎯 Use Cases
-
-### Scenario 1: Daily Operations
-
-```bash
-# Quick server status check
-ssh_execute.py web-01 "uptime && free -m && df -h"
-
-# Batch service restart
-ssh_cluster.py "systemctl restart nginx" --environment production --parallel
-```
-
-### Scenario 2: Large File Deployment
-
-```bash
-# Upload 500MB application package (auto progress display)
-ssh_upload.py prod-web-01 ./app-v2.0.tar.gz /opt/apps/
-
-# Output example:
-# Upload progress: 45.2% (2.1 MB/s) ETA: 102.3s
-```
-
-### Scenario 3: Data Migration
-
-```bash
-# Server-to-server direct transfer (no local bandwidth)
-ssh_server_transfer.py old-server /data/database.sql new-server /data/ --mode direct
-
-# Use rsync for incremental sync
-ssh_server_transfer.py source /data/ target /backup/ --use-rsync
-```
-
-### Scenario 4: Jump Host Access
-
-```bash
-# Access internal server through jump host (auto-handled)
-ssh_execute.py internal-server "docker ps"
-```
-
-## 📈 Performance Data
-
-### Real Test Data
-
-**Test Environment**:
-- File size: 297MB
-- Network speed: 1.6-2.1 MB/s
-- Server: test-001
-
-**Test Results**:
-
-| Metric | Native SCP | Paramiko SFTP | Advantage |
-|--------|-----------|---------------|-----------|
-| Progress Display | ❌ None | ✅ Real-time | User Experience |
-| Timeout Issue | ❌ 30s fixed | ✅ Unlimited | Stability |
-| Resume Support | ❌ Not supported | ✅ Supported | Reliability |
-| Transfer Speed | Fast | Slightly slower | Performance |
-
-**Smart Selection Strategy**:
-- File ≤ 80MB: Use native SCP (fast completion)
-- File > 80MB: Use Paramiko SFTP (real-time progress)
-
-### Daemon Performance
-
-**Command Execution Speed Comparison**:
-
-```
-Traditional Mode:
-  Command 1: 0.45s
-  Command 2: 0.45s
-  Command 3: 0.45s
-  Total: 1.35s
-
-Daemon Mode:
-  Command 1: 0.45s (first start daemon)
-  Command 2: 0.12s (reuse connection)
-  Command 3: 0.12s (reuse connection)
-  Total: 0.69s (1.96x improvement)
-```
-
-## 🔐 Security Features
-
-- Support key and password authentication
-- Password encrypted storage in SSH config comments
-- Support key password protection
-- Auto-add host keys (configurable)
-- Support SSH agent forwarding
-
-## 🛠️ Advanced Features
-
-### Resume Support
-
-```bash
-# Upload large file, support resume after interruption
-ssh_upload.py prod-web-01 ./large-file.iso /tmp/ --resume
-```
-
-### Recursive Directory Transfer
-
-```bash
-# Recursively upload entire directory
-ssh_upload.py prod-web-01 ./dist/ /var/www/html/ --recursive
-```
-
-### Auto Error Recovery
-
-- SSH connection auto-reconnect on disconnect (max 3 times)
-- Heartbeat detection every 60 seconds
-- Auto-retry on transfer failure
-
-### Configuration Management
-
-```bash
-# Filter by environment
-ssh_config_manager_v3.py list-servers --environment production
-
-# Filter by tags
-ssh_config_manager_v3.py list-servers --tags web,nginx
-
-# Update server info
-ssh_config_manager_v3.py update prod-web-01 --description "New description" --tags tag1,tag2
-```
-
-## 📚 Configuration Examples
-
-### Key Authentication
-
-```ssh-config
-# ===== prod-web-01 =====
-# description: Production Web Server
-# environment: production
-# tags: web,nginx,production
-# location: Alibaba Cloud - Beijing
-Host prod-web-01
-    HostName 192.168.1.100
-    User root
-    IdentityFile ~/.ssh/id_rsa
-    Port 22
-```
-
-### Password Authentication
-
-```ssh-config
-# ===== dev-server =====
-# description: Development Server
-# environment: development
-# password: your-password
-Host dev-server
-    HostName 192.168.1.200
-    User root
-    Port 22
-```
-
-### Jump Host Configuration
-
-```ssh-config
-Host bastion
-    HostName bastion.example.com
-    User jumpuser
-    IdentityFile ~/.ssh/jump_key
-
-Host internal-server
-    HostName 10.0.1.100
-    User appuser
-    IdentityFile ~/.ssh/id_rsa
-    ProxyJump bastion
-```
-
-## 🎨 Integration with Codex / Claude Code
-
-In Codex or Claude Code, AI uses the `SKILL.md` description to automatically select ssh-skill for SSH operations:
-
-```
-User: Check Nginx status on prod-web-01
-AI: [Auto-calls ssh_execute.py]
-
-User: Upload app.tar.gz to /tmp on prod-web-01
-AI: [Auto-calls ssh_upload.py]
-
-User: Migrate data from old-server to new-server
-AI: [Auto-calls ssh_server_transfer.py]
-```
-
-## 🔄 Version History
-
-### v3.3.1 (2026-05-01)
-- 🧩 **Codex metadata compatibility fix**: Shortened the `SKILL.md` frontmatter `description` to avoid Codex skill loading failures caused by the 1024-character description limit
-- 🛡️ **Trigger semantics preserved**: Kept the critical SSH/server operations trigger, raw `ssh/scp` prohibition, and core server/jump-host/transfer/tunnel/database/internal-access keywords
-
-### v3.2 (2026-03-04)
-- ✨ **Large file transfer optimization**: Smart mode switching (80MB threshold)
-- ✨ **Real-time progress display**: Percentage, speed, ETA
-- ✨ **Smart timeout calculation**: Auto-calculate based on file size
-- ✨ **Block size optimization**: 32KB → 128KB (4x improvement)
-- ✨ **No timeout limit**: Large file transfers no longer timeout
-
-### v3.1
-- Daemon long-connection mode
-- Server-to-server direct transfer
-- Batch concurrent operations
-- Unified configuration management
-
-### v3.0
-- Based on OpenSSH config
-- Jump host support
-- Metadata management
-
-## 🤝 Contributing
-
-Issues and Pull Requests are welcome!
-
-## 📄 License
+## License
 
 MIT License
-
-## 👨‍💻 Author
-
-Michael Zhang - [@badseal](https://github.com/badseal)
-
----
-
-**Making remote server operations as simple and efficient as local ones!** 🚀

@@ -39,6 +39,9 @@ import re
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_script_dir, 'lib'))
 
+from output_limits import BoundedText, ProgressEmitter, collect_text, progress_is_enabled
+from security import configure_paramiko_host_keys
+
 
 def _fix_remote_path(path):
     """修复被 MSYS bash 转换的远程路径（Windows 环境）"""
@@ -248,6 +251,7 @@ def _stream_transfer_file(source_sftp, dest_sftp, source_path, dest_path,
     start_time = time.time()
     transferred = 0
     chunk_size = 64 * 1024  # 64KB
+    progress_emitter = ProgressEmitter(sys.stderr, enabled=progress)
 
     try:
         with source_sftp.open(source_path, 'rb') as src_file:
@@ -260,19 +264,14 @@ def _stream_transfer_file(source_sftp, dest_sftp, source_path, dest_path,
                     dst_file.write(chunk)
                     transferred += len(chunk)
 
-                    if progress:
+                    if progress_emitter.enabled:
                         elapsed = time.time() - start_time
                         speed = transferred / elapsed if elapsed > 0 else 0
-                        percent = (transferred / total_size) * 100 if total_size > 0 else 0
-                        info = {
-                            'file': posixpath.basename(source_path),
-                            'percent': round(percent, 1),
-                            'transferred': transferred,
-                            'total': total_size,
-                            'speed': _human_size(int(speed)) + '/s',
-                        }
-                        sys.stderr.write(json.dumps(info, ensure_ascii=True) + '\n')
-                        sys.stderr.flush()
+                        progress_emitter.emit(
+                            'transfer', transferred, total_size,
+                            file_path=posixpath.basename(source_path),
+                            speed=_human_size(int(speed)) + '/s',
+                        )
 
         elapsed = time.time() - start_time
         return {
@@ -377,7 +376,8 @@ def _remote_mkdir_p(sftp, remote_dir):
 
 
 def direct_transfer(source_alias, source_path, dest_alias, dest_path,
-                    use_rsync=False, progress=True, timeout=300):
+                    use_rsync=False, progress=True, timeout=300,
+                    allow_agent_forwarding=False):
     """
     直连模式传输：在源服务器上执行 scp/rsync 命令
 
@@ -395,28 +395,32 @@ def direct_transfer(source_alias, source_path, dest_alias, dest_path,
     if use_rsync:
         cmd = (
             f"rsync -avz --progress "
-            f"-e 'ssh -p {dest_port} -o StrictHostKeyChecking=no' "
+            f"-e 'ssh -p {dest_port} -o StrictHostKeyChecking=accept-new' "
             f"'{source_path}' '{dest_user}@{dest_host}:{dest_path}'"
         )
     else:
         # scp 命令
         cmd = (
-            f"scp -o StrictHostKeyChecking=no "
+            f"scp -o StrictHostKeyChecking=accept-new "
             f"-P {dest_port} "
             f"'{source_path}' '{dest_user}@{dest_host}:{dest_path}'"
         )
 
-    # 连接源服务器（启用 agent forwarding）
+    # 连接源服务器；agent forwarding 仅在显式授权时启用。
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    configure_paramiko_host_keys(client)
+
+    use_local_agent = not (
+        source_params.get('key_file') or source_params.get('password')
+    )
 
     connect_kwargs = {
         'hostname': source_params['hostname'],
         'port': source_params['port'],
         'username': source_params['user'],
         'timeout': 30,
-        'allow_agent': True,
-        'look_for_keys': True,
+        'allow_agent': use_local_agent,
+        'look_for_keys': use_local_agent,
     }
 
     if source_params.get('key_file'):
@@ -426,62 +430,83 @@ def direct_transfer(source_alias, source_path, dest_alias, dest_path,
 
     client.connect(**connect_kwargs)
 
-    # 启用 agent forwarding
-    transport = client.get_transport()
-    session = transport.open_session()
-
-    try:
-        # 请求 agent forwarding
-        paramiko.agent.AgentRequestHandler(session)
-    except Exception:
-        pass  # agent forwarding 不可用时继续尝试
-
     start_time = time.time()
-    output_lines = []
+    output_collector = BoundedText()
+    progress_emitter = ProgressEmitter(sys.stderr, enabled=progress)
+    session = None
+    agent_warnings = []
 
     try:
-        # 执行传输命令（使用 PTY 以获取进度输出）
-        stdin, stdout, stderr = client.exec_command(cmd, timeout=timeout, get_pty=True)
+        if allow_agent_forwarding:
+            session = client.get_transport().open_session()
+            session.settimeout(timeout)
+            try:
+                paramiko.agent.AgentRequestHandler(session)
+            except Exception:
+                agent_warnings.append('agent_forwarding_unavailable')
+            session.get_pty()
+            session.exec_command(cmd)
+            stdout = session.makefile('r')
+            stderr = session.makefile_stderr('r')
+        else:
+            _, stdout, stderr = client.exec_command(
+                cmd, timeout=timeout, get_pty=True
+            )
 
         for line in stdout:
+            if isinstance(line, bytes):
+                line = line.decode('utf-8', errors='replace')
             stripped = line.strip()
             if stripped:
-                output_lines.append(stripped)
-                if progress:
+                output_collector.feed((stripped + '\n').encode('utf-8'))
+                if progress_emitter.enabled:
                     # 解析进度并输出
                     progress_info = _parse_transfer_progress(stripped, use_rsync)
                     if progress_info:
-                        sys.stderr.write(
-                            json.dumps(progress_info, ensure_ascii=True) + '\n'
+                        percent = float(progress_info.get('percent', 0))
+                        progress_emitter.emit(
+                            'transfer', int(percent * 100), 10000,
+                            **{key: value for key, value in progress_info.items()
+                               if key != 'percent'},
                         )
-                        sys.stderr.flush()
 
         exit_code = stdout.channel.recv_exit_status()
-        stderr_text = stderr.read().decode('utf-8', errors='replace')
+        stderr_result = collect_text(stderr.read())
+        output_result = output_collector.finish()
         elapsed = time.time() - start_time
 
-        return {
+        result = {
             'success': exit_code == 0,
             'mode': 'direct',
             'method': 'rsync' if use_rsync else 'scp',
             'exit_code': exit_code,
             'time_elapsed': round(elapsed, 2),
             'command': cmd,
-            'output': '\n'.join(output_lines[-20:]),  # 最后 20 行输出
-            'stderr': stderr_text if exit_code != 0 else None,
+            'output': output_result.text,
+            'stderr': stderr_result.text if exit_code != 0 else None,
+            'output_limits': {
+                'output': output_result.to_meta(),
+                'stderr': stderr_result.to_meta(),
+            },
+            'meta': {'warnings': agent_warnings},
         }
+        if allow_agent_forwarding:
+            result['meta']['warnings'].append('agent_forwarding_enabled')
+        return result
     except Exception as e:
         return {
             'success': False,
             'mode': 'direct',
             'error': f'直连传输失败: {e}',
             'command': cmd,
+            'meta': {'warnings': agent_warnings},
         }
     finally:
-        try:
-            session.close()
-        except Exception:
-            pass
+        if session is not None:
+            try:
+                session.close()
+            except Exception:
+                pass
         try:
             client.close()
         except Exception:
@@ -537,7 +562,8 @@ def validate_transfer(source_alias, dest_alias):
 
 def server_transfer(source_alias, source_path, dest_alias, dest_path,
                     mode='auto', use_rsync=False, progress=True,
-                    size_threshold_mb=10, timeout=300):
+                    size_threshold_mb=10, timeout=300,
+                    allow_agent_forwarding=False):
     """
     服务器到服务器文件传输（统一接口）
 
@@ -588,7 +614,7 @@ def server_transfer(source_alias, source_path, dest_alias, dest_path,
     # 2. 执行传输
     try:
         if selected_mode == 'direct':
-            if not check_ssh_agent():
+            if allow_agent_forwarding and not check_ssh_agent():
                 if mode == 'hybrid':
                     # 混合模式：无 agent 时降级
                     if progress:
@@ -605,11 +631,19 @@ def server_transfer(source_alias, source_path, dest_alias, dest_path,
                     # 强制直连但无 agent，仍然尝试（可能有预配置密钥）
                     pass
 
-            return direct_transfer(
+            result = direct_transfer(
                 source_alias, source_path,
                 dest_alias, dest_path,
-                use_rsync, progress, timeout
+                use_rsync=use_rsync,
+                progress=progress,
+                timeout=timeout,
+                allow_agent_forwarding=allow_agent_forwarding,
             )
+            meta = result.setdefault('meta', {})
+            warnings = meta.setdefault('warnings', [])
+            if allow_agent_forwarding and 'agent_forwarding_enabled' not in warnings:
+                warnings.append('agent_forwarding_enabled')
+            return result
 
         elif selected_mode == 'stream':
             return stream_transfer(
@@ -638,7 +672,7 @@ def server_transfer(source_alias, source_path, dest_alias, dest_path,
             }
 
 
-def main():
+def _legacy_main(argv=None):
     parser = argparse.ArgumentParser(
         description='SSH 服务器间文件传输工具 v1.0'
     )
@@ -651,22 +685,26 @@ def main():
                         help='传输模式 (默认: auto)')
     parser.add_argument('--use-rsync', action='store_true',
                         help='使用 rsync（仅直连模式，支持增量同步）')
-    parser.add_argument('--progress', action='store_true', default=True,
-                        help='显示传输进度 (默认开启)')
-    parser.add_argument('--no-progress', action='store_true',
-                        help='禁用进度输出')
+    parser.add_argument('--allow-agent-forwarding', action='store_true',
+                        help='显式允许将本地 SSH agent 转发到源服务器')
+    progress_group = parser.add_mutually_exclusive_group()
+    progress_group.add_argument('--progress', dest='progress', action='store_true',
+                                help='在 stderr 启用有界 JSONL 进度')
+    progress_group.add_argument('--no-progress', dest='progress', action='store_false',
+                                help='禁用进度输出')
+    parser.set_defaults(progress=None)
     parser.add_argument('--size-threshold', type=int, default=10,
                         help='大小阈值（MB），超过此值优先使用直连 (默认: 10)')
     parser.add_argument('--timeout', type=int, default=300,
                         help='超时时间（秒）(默认: 300)')
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # 修复 MSYS 路径转换
     source_path = _fix_remote_path(args.source_path)
     dest_path = _fix_remote_path(args.dest_path)
 
-    show_progress = not args.no_progress
+    show_progress = progress_is_enabled(args.progress, sys.stderr)
 
     try:
         result = server_transfer(
@@ -679,6 +717,7 @@ def main():
             progress=show_progress,
             size_threshold_mb=args.size_threshold,
             timeout=args.timeout,
+            allow_agent_forwarding=args.allow_agent_forwarding,
         )
 
         # 输出结果
@@ -705,5 +744,14 @@ def main():
         sys.exit(1)
 
 
+def main(argv=None):
+    from ssh_skill import delegate_legacy_entrypoint
+
+    arguments = sys.argv[1:] if argv is None else list(argv)
+    return delegate_legacy_entrypoint(
+        'transfer', arguments, legacy_main=_legacy_main
+    )
+
+
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

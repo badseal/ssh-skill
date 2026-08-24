@@ -13,8 +13,12 @@
 import subprocess
 import os
 import tempfile
-from typing import Optional, Iterator
-from dataclasses import dataclass
+from typing import Any, Dict, Optional, Iterator
+from dataclasses import dataclass, field
+
+from openssh_transport import OpenSSHOptions, run_openssh
+from output_limits import collect_text
+from platform_adapter import find_openssh, normalize_platform
 
 
 @dataclass
@@ -24,6 +28,37 @@ class SSHResult:
     stdout: str
     stderr: str
     exit_code: int
+    output: Dict[str, Any] = field(default_factory=dict)
+    error_code: str | None = None
+    retryable: bool | None = None
+    outcome: str | None = None
+
+
+def _bounded_ssh_result(
+    success: bool,
+    stdout: str | bytes,
+    stderr: str | bytes,
+    exit_code: int,
+    *,
+    error_code: str | None = None,
+    retryable: bool | None = None,
+    outcome: str | None = None,
+) -> SSHResult:
+    bounded_stdout = collect_text(stdout)
+    bounded_stderr = collect_text(stderr)
+    return SSHResult(
+        success=success,
+        stdout=bounded_stdout.text,
+        stderr=bounded_stderr.text,
+        exit_code=exit_code,
+        output={
+            "stdout": bounded_stdout.to_meta(),
+            "stderr": bounded_stderr.to_meta(),
+        },
+        error_code=error_code,
+        retryable=retryable,
+        outcome=outcome,
+    )
 
 
 class NativeSSHClient:
@@ -74,8 +109,7 @@ class NativeSSHClient:
         args = [
             "ssh",
             "-p", str(self.port),
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "StrictHostKeyChecking=accept-new",
             "-o", f"ConnectTimeout={self.timeout}",
         ]
 
@@ -121,41 +155,39 @@ class NativeSSHClient:
         Returns:
             SSHResult对象，包含执行结果
         """
-        try:
-            args = self._build_ssh_base_args()
-            args.append(f"{self.user}@{self.host}")
-            args.append(command)
-
-            result = subprocess.run(
-                args,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
-                timeout=self.timeout
-            )
-
-            return SSHResult(
-                success=(result.returncode == 0),
-                stdout=result.stdout,
-                stderr=result.stderr,
-                exit_code=result.returncode
-            )
-        except subprocess.TimeoutExpired:
+        executable = find_openssh(normalize_platform())
+        if not executable:
             return SSHResult(
                 success=False,
                 stdout="",
-                stderr=f"Command timeout after {self.timeout} seconds",
+                stderr="OpenSSH client was not found",
                 exit_code=-1
             )
-        except Exception as e:
-            return SSHResult(
-                success=False,
-                stdout="",
-                stderr=f"Execution error: {str(e)}",
-                exit_code=-1
-            )
+        target = self.alias if self.alias else f"{self.user}@{self.host}"
+        result = run_openssh(
+            OpenSSHOptions(
+                executable=executable,
+                config_path=os.path.expanduser("~/.ssh/config"),
+                port=self.port,
+                key_file=os.path.expanduser(self.key_file) if self.key_file else None,
+                proxy_jump=self.proxy_jump,
+                forward_agent=self.forward_agent,
+            ),
+            target,
+            command,
+            None,
+            self.timeout,
+        )
+        return SSHResult(
+            result.success,
+            result.stdout,
+            result.stderr,
+            result.exit_code,
+            output=result.output,
+            error_code=result.error_code,
+            retryable=result.retryable,
+            outcome=result.outcome,
+        )
 
     def upload(self, local_path: str, remote_path: str, timeout: Optional[int] = None, show_progress: bool = True) -> SSHResult:
         """
@@ -194,8 +226,7 @@ class NativeSSHClient:
 
             # 基本参数
             args.extend(["-P", str(self.port)])
-            args.extend(["-o", "StrictHostKeyChecking=no"])
-            args.extend(["-o", "UserKnownHostsFile=/dev/null"])
+            args.extend(["-o", "StrictHostKeyChecking=accept-new"])
 
             # 密钥文件
             if self.key_file:
@@ -228,11 +259,11 @@ class NativeSSHClient:
                 timeout=actual_timeout
             )
 
-            return SSHResult(
-                success=(result.returncode == 0),
-                stdout=f"File uploaded: {local_path} -> {remote_path}" if result.returncode == 0 else result.stdout,
-                stderr=result.stderr if result.returncode != 0 else "",
-                exit_code=result.returncode
+            return _bounded_ssh_result(
+                result.returncode == 0,
+                f"File uploaded: {local_path} -> {remote_path}" if result.returncode == 0 else result.stdout,
+                result.stderr if result.returncode != 0 else "",
+                result.returncode,
             )
         except subprocess.TimeoutExpired:
             return SSHResult(
@@ -275,8 +306,7 @@ class NativeSSHClient:
 
             # 基本参数
             args.extend(["-P", str(self.port)])
-            args.extend(["-o", "StrictHostKeyChecking=no"])
-            args.extend(["-o", "UserKnownHostsFile=/dev/null"])
+            args.extend(["-o", "StrictHostKeyChecking=accept-new"])
 
             # 密钥文件
             if self.key_file:
@@ -309,11 +339,11 @@ class NativeSSHClient:
                 timeout=actual_timeout
             )
 
-            return SSHResult(
-                success=(result.returncode == 0),
-                stdout=f"File downloaded: {remote_path} -> {local_path}" if result.returncode == 0 else result.stdout,
-                stderr=result.stderr if result.returncode != 0 else "",
-                exit_code=result.returncode
+            return _bounded_ssh_result(
+                result.returncode == 0,
+                f"File downloaded: {remote_path} -> {local_path}" if result.returncode == 0 else result.stdout,
+                result.stderr if result.returncode != 0 else "",
+                result.returncode,
             )
         except subprocess.TimeoutExpired:
             return SSHResult(
@@ -377,7 +407,7 @@ class NativeSSHClient:
             # 如果有错误输出，也返回
             if process.stderr:
                 for line in process.stderr:
-                    yield f"[STDERR] {line.rstrip('\n')}"
+                    yield "[STDERR] " + line.rstrip("\n")
 
         except subprocess.TimeoutExpired:
             if process:

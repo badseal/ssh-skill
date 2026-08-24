@@ -9,9 +9,16 @@ import paramiko
 import threading
 import time
 import os
-from typing import Optional, List, Union, Dict, Iterator
-from dataclasses import dataclass
+import re
+import socket
+from contextlib import nullcontext
+from typing import Optional, List, Union, Dict, Iterator, Any
+from dataclasses import dataclass, field
 from io import StringIO
+
+from output_limits import BoundedText, ProgressEmitter, collect_text
+from platform_adapter import normalize_platform
+from security import askpass_environment, configure_paramiko_host_keys
 
 
 @dataclass
@@ -21,6 +28,37 @@ class SSHResult:
     stdout: str
     stderr: str
     exit_code: int
+    output: Dict[str, Any] = field(default_factory=dict)
+    error_code: str | None = None
+    retryable: bool | None = None
+    outcome: str | None = None
+
+
+def _bounded_ssh_result(
+    success: bool,
+    stdout: str | bytes,
+    stderr: str | bytes,
+    exit_code: int,
+    *,
+    error_code: str | None = None,
+    retryable: bool | None = None,
+    outcome: str | None = None,
+) -> SSHResult:
+    bounded_stdout = collect_text(stdout)
+    bounded_stderr = collect_text(stderr)
+    return SSHResult(
+        success=success,
+        stdout=bounded_stdout.text,
+        stderr=bounded_stderr.text,
+        exit_code=exit_code,
+        output={
+            "stdout": bounded_stdout.to_meta(),
+            "stderr": bounded_stderr.to_meta(),
+        },
+        error_code=error_code,
+        retryable=retryable,
+        outcome=outcome,
+    )
 
 
 class ConnectionPool:
@@ -92,7 +130,7 @@ class ConnectionPool:
 
             # 创建新连接
             client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            configure_paramiko_host_keys(client)
 
             try:
                 if password:
@@ -234,11 +272,6 @@ class ParamikoClient:
         if not password and not key_file:
             raise ValueError("必须提供 password 或 key_file")
 
-        # 为密码认证创建密码脚本（用于 scp 文件传输）
-        self._password_script = None
-        if self.password:
-            self._password_script = self._create_password_script()
-
         # Performance warning: Password auth + jump hosts has lower performance
         if self.password and self.jump_hosts:
             import sys
@@ -248,47 +281,6 @@ class ParamikoClient:
                 "Recommended: Upgrade to key-based auth for better performance.",
                 file=sys.stderr
             )
-
-    def _create_password_script(self) -> str:
-        """
-        创建密码脚本用于 scp 命令（SSH_ASKPASS）
-
-        Returns:
-            脚本文件路径
-        """
-        import tempfile
-        import stat
-        import os
-
-        # 创建临时脚本文件
-        fd, script_path = tempfile.mkstemp(suffix='.sh' if os.name != 'nt' else '.bat', text=True)
-
-        if os.name == 'nt':
-            # Windows 批处理脚本
-            script_content = f'@echo off\necho {self.password}\n'
-        else:
-            # Unix shell 脚本
-            script_content = f'#!/bin/sh\necho "{self.password}"\n'
-
-        with os.fdopen(fd, 'w') as f:
-            f.write(script_content)
-
-        # 设置可执行权限（Unix）
-        if os.name != 'nt':
-            os.chmod(script_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
-
-        return script_path
-
-    def __del__(self):
-        """析构函数，清理临时文件"""
-        # 在 Python 解释器关闭时，os 模块可能已被清理
-        if hasattr(self, '_password_script') and self._password_script:
-            try:
-                import os
-                if os.path.exists(self._password_script):
-                    os.unlink(self._password_script)
-            except:
-                pass
 
     def _build_jump_string(self) -> Optional[str]:
         """
@@ -344,14 +336,7 @@ class ParamikoClient:
 
         # 基本参数
         cmd.extend(["-P", str(self.port)])
-        cmd.extend(["-o", "StrictHostKeyChecking=no"])
-
-        # UserKnownHostsFile
-        import os
-        if os.name == "nt":
-            cmd.extend(["-o", "UserKnownHostsFile=NUL"])
-        else:
-            cmd.extend(["-o", "UserKnownHostsFile=/dev/null"])
+        cmd.extend(["-o", "StrictHostKeyChecking=accept-new"])
 
         # ProxyJump 支持
         jump_string = self._build_jump_string()
@@ -370,25 +355,74 @@ class ParamikoClient:
 
         return cmd
 
-    def _get_env_with_password(self) -> Dict[str, str]:
-        """
-        获取包含密码脚本的环境变量
+    def _scp_environment(self):
+        if self.password:
+            return askpass_environment(self.password, normalize_platform())
+        return nullcontext(os.environ.copy())
 
-        Returns:
-            环境变量字典
-        """
-        import os
-        env = os.environ.copy()
+    def _run_scp_command(
+        self,
+        scp_cmd: List[str],
+        *,
+        operation: str,
+        success_message: str,
+        timeout: Optional[int],
+        show_progress: bool,
+    ) -> SSHResult:
+        import subprocess
+        import sys
 
-        if self._password_script:
-            env['SSH_ASKPASS'] = self._password_script
-            # DISPLAY 需要设置，即使在无 GUI 环境
-            if 'DISPLAY' not in env:
-                env['DISPLAY'] = ':0'
-            # SSH_ASKPASS_REQUIRE 强制使用 SSH_ASKPASS（OpenSSH 8.4+）
-            env['SSH_ASKPASS_REQUIRE'] = 'force'
+        process = None
+        stderr_collector = BoundedText()
+        progress_emitter = ProgressEmitter(sys.stderr, enabled=show_progress)
+        try:
+            with self._scp_environment() as environment:
+                process = subprocess.Popen(
+                    scp_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace',
+                    env=environment,
+                )
 
-        return env
+                if show_progress and process.stderr:
+                    for line in iter(process.stderr.readline, ''):
+                        if not line:
+                            break
+                        stderr_collector.feed(line.encode('utf-8'))
+                        match = re.search(r'(\d+)%', line)
+                        if match:
+                            percent = min(100, int(match.group(1)))
+                            progress_emitter.emit(operation, percent, 100)
+
+                stdout, remaining_stderr = process.communicate(timeout=timeout)
+                if remaining_stderr:
+                    stderr_collector.feed(remaining_stderr.encode('utf-8'))
+
+            stdout_result = collect_text(stdout or success_message)
+            stderr_result = stderr_collector.finish()
+            return SSHResult(
+                success=process.returncode == 0,
+                stdout=stdout_result.text,
+                stderr=stderr_result.text if process.returncode != 0 else "",
+                exit_code=process.returncode,
+                output={
+                    'stdout': stdout_result.to_meta(),
+                    'stderr': stderr_result.to_meta(),
+                },
+            )
+        except subprocess.TimeoutExpired:
+            if process is not None:
+                process.kill()
+            return _bounded_ssh_result(
+                False, "", f"{operation.title()} timeout after {timeout} seconds", -1
+            )
+        except Exception as exc:
+            return _bounded_ssh_result(
+                False, "", f"{operation.title()} error: {exc}", -1
+            )
 
     def _connect_through_jump_hosts(self) -> paramiko.SSHClient:
         """
@@ -406,7 +440,7 @@ class ParamikoClient:
         try:
             # 1. 连接到第一个跳板机
             current_client = paramiko.SSHClient()
-            current_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            configure_paramiko_host_keys(current_client)
 
             # 解析第一个跳板机配置
             first_jump = self.jump_hosts[0]
@@ -476,7 +510,7 @@ class ParamikoClient:
 
                 # 通过通道连接到下一个跳板机
                 next_client = paramiko.SSHClient()
-                next_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                configure_paramiko_host_keys(next_client)
 
                 if jump_password:
                     next_client.connect(
@@ -513,7 +547,7 @@ class ParamikoClient:
 
             # 连接到目标服务器
             target_client = paramiko.SSHClient()
-            target_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            configure_paramiko_host_keys(target_client)
 
             if self.password:
                 target_client.connect(
@@ -591,15 +625,25 @@ class ParamikoClient:
             client = self._get_connection()
             stdin, stdout, stderr = client.exec_command(command, timeout=self.timeout)
 
-            stdout_text = stdout.read().decode('utf-8', errors='replace')
-            stderr_text = stderr.read().decode('utf-8', errors='replace')
+            stdout_bytes = stdout.read()
+            stderr_bytes = stderr.read()
             exit_code = stdout.channel.recv_exit_status()
 
+            return _bounded_ssh_result(
+                exit_code == 0,
+                stdout_bytes,
+                stderr_bytes,
+                exit_code,
+            )
+        except (TimeoutError, socket.timeout):
             return SSHResult(
-                success=(exit_code == 0),
-                stdout=stdout_text,
-                stderr=stderr_text,
-                exit_code=exit_code
+                success=False,
+                stdout="",
+                stderr=f"Execution timeout after {self.timeout} seconds",
+                exit_code=-1,
+                error_code="outcome_unknown",
+                retryable=False,
+                outcome="unknown",
             )
         except Exception as e:
             return SSHResult(
@@ -628,7 +672,7 @@ class ParamikoClient:
         try:
             # 创建新连接（启用 agent）
             client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            configure_paramiko_host_keys(client)
 
             connect_kwargs = {
                 'hostname': self.host,
@@ -658,8 +702,8 @@ class ParamikoClient:
                 command, timeout=cmd_timeout, get_pty=True
             )
 
-            stdout_text = stdout.read().decode('utf-8', errors='replace')
-            stderr_text = stderr.read().decode('utf-8', errors='replace')
+            stdout_bytes = stdout.read()
+            stderr_bytes = stderr.read()
             exit_code = stdout.channel.recv_exit_status()
 
             try:
@@ -671,11 +715,11 @@ class ParamikoClient:
             except Exception:
                 pass
 
-            return SSHResult(
-                success=(exit_code == 0),
-                stdout=stdout_text,
-                stderr=stderr_text,
-                exit_code=exit_code
+            return _bounded_ssh_result(
+                exit_code == 0,
+                stdout_bytes,
+                stderr_bytes,
+                exit_code,
             )
         except Exception as e:
             return SSHResult(
@@ -729,20 +773,17 @@ class ParamikoClient:
                 # 大文件传输：设置为 None（无限制）
                 sftp.get_channel().settimeout(None)
 
-            # 进度回调
+            progress_emitter = ProgressEmitter(sys.stderr, enabled=show_progress)
+
             def progress_callback(progress: TransferProgress):
-                if show_progress:
-                    info = progress.to_dict()
-                    sys.stderr.write(f"\r上传进度: {info['percent']}% ({info['speed']}) ETA: {info['eta']}s")
-                    sys.stderr.flush()
+                progress_emitter.emit(
+                    'upload', progress.transferred_bytes, progress.total_bytes,
+                    file_path=progress.file_path,
+                )
 
             # 使用 SFTPTransfer 上传（支持分块和进度）
             transfer = SFTPTransfer(sftp, progress_callback=progress_callback if show_progress else None)
             result = transfer.upload_file(local_path, remote_path, resume=False)
-
-            if show_progress:
-                sys.stderr.write("\n")
-                sys.stderr.flush()
 
             sftp.close()
 
@@ -809,20 +850,17 @@ class ParamikoClient:
             else:
                 sftp.get_channel().settimeout(None)
 
-            # 进度回调
+            progress_emitter = ProgressEmitter(sys.stderr, enabled=show_progress)
+
             def progress_callback(progress: TransferProgress):
-                if show_progress:
-                    info = progress.to_dict()
-                    sys.stderr.write(f"\r上传进度: {info['percent']}% ({info['speed']}) ETA: {info['eta']}s")
-                    sys.stderr.flush()
+                progress_emitter.emit(
+                    'upload', progress.transferred_bytes, progress.total_bytes,
+                    file_path=progress.file_path,
+                )
 
             # 使用 SFTPTransfer 上传
             transfer = SFTPTransfer(sftp, progress_callback=progress_callback if show_progress else None)
             result = transfer.upload_file(local_path, remote_path, resume=False)
-
-            if show_progress:
-                sys.stderr.write("\n")
-                sys.stderr.flush()
 
             sftp.close()
 
@@ -864,59 +902,14 @@ class ParamikoClient:
         Returns:
             SSHResult对象
         """
-        import subprocess
-        import sys
-
         scp_cmd = self._build_scp_command(local_path, remote_path, upload=True)
-
-        try:
-            process = subprocess.Popen(
-                scp_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
-                env=self._get_env_with_password()
-            )
-
-            # 实时显示 stderr（scp 的进度信息在 stderr）
-            stderr_lines = []
-            if show_progress and process.stderr:
-                for line in iter(process.stderr.readline, ''):
-                    if not line:
-                        break
-                    print(line.rstrip(), file=sys.stderr)
-                    stderr_lines.append(line)
-
-            # 等待完成
-            stdout, remaining_stderr = process.communicate(timeout=timeout)
-            if remaining_stderr:
-                stderr_lines.append(remaining_stderr)
-
-            stderr_output = ''.join(stderr_lines)
-
-            return SSHResult(
-                success=(process.returncode == 0),
-                stdout=stdout if process.returncode == 0 else f"File uploaded via scp: {local_path} -> {remote_path}",
-                stderr=stderr_output if process.returncode != 0 else "",
-                exit_code=process.returncode
-            )
-        except subprocess.TimeoutExpired:
-            process.kill()
-            return SSHResult(
-                success=False,
-                stdout="",
-                stderr=f"Upload timeout after {timeout} seconds",
-                exit_code=-1
-            )
-        except Exception as e:
-            return SSHResult(
-                success=False,
-                stdout="",
-                stderr=f"Upload error: {str(e)}",
-                exit_code=-1
-            )
+        return self._run_scp_command(
+            scp_cmd,
+            operation='upload',
+            success_message=f"File uploaded via scp: {local_path} -> {remote_path}",
+            timeout=timeout,
+            show_progress=show_progress,
+        )
 
     def download(self, remote_path: str, local_path: str, timeout: Optional[int] = None, show_progress: bool = True) -> SSHResult:
         """
@@ -952,20 +945,17 @@ class ParamikoClient:
                 # 大文件传输：设置为 None（无限制）
                 sftp.get_channel().settimeout(None)
 
-            # 进度回调
+            progress_emitter = ProgressEmitter(sys.stderr, enabled=show_progress)
+
             def progress_callback(progress: TransferProgress):
-                if show_progress:
-                    info = progress.to_dict()
-                    sys.stderr.write(f"\r下载进度: {info['percent']}% ({info['speed']}) ETA: {info['eta']}s")
-                    sys.stderr.flush()
+                progress_emitter.emit(
+                    'download', progress.transferred_bytes, progress.total_bytes,
+                    file_path=progress.file_path,
+                )
 
             # 使用 SFTPTransfer 下载（支持分块和进度）
             transfer = SFTPTransfer(sftp, progress_callback=progress_callback if show_progress else None)
             result = transfer.download_file(remote_path, local_path, resume=False)
-
-            if show_progress:
-                sys.stderr.write("\n")
-                sys.stderr.flush()
 
             sftp.close()
 
@@ -1028,20 +1018,17 @@ class ParamikoClient:
             else:
                 sftp.get_channel().settimeout(None)
 
-            # 进度回调
+            progress_emitter = ProgressEmitter(sys.stderr, enabled=show_progress)
+
             def progress_callback(progress: TransferProgress):
-                if show_progress:
-                    info = progress.to_dict()
-                    sys.stderr.write(f"\r下载进度: {info['percent']}% ({info['speed']}) ETA: {info['eta']}s")
-                    sys.stderr.flush()
+                progress_emitter.emit(
+                    'download', progress.transferred_bytes, progress.total_bytes,
+                    file_path=progress.file_path,
+                )
 
             # 使用 SFTPTransfer 下载
             transfer = SFTPTransfer(sftp, progress_callback=progress_callback if show_progress else None)
             result = transfer.download_file(remote_path, local_path, resume=False)
-
-            if show_progress:
-                sys.stderr.write("\n")
-                sys.stderr.flush()
 
             sftp.close()
 
@@ -1083,59 +1070,14 @@ class ParamikoClient:
         Returns:
             SSHResult对象
         """
-        import subprocess
-        import sys
-
         scp_cmd = self._build_scp_command(remote_path, local_path, upload=False)
-
-        try:
-            process = subprocess.Popen(
-                scp_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
-                env=self._get_env_with_password()
-            )
-
-            # 实时显示 stderr（scp 的进度信息在 stderr）
-            stderr_lines = []
-            if show_progress and process.stderr:
-                for line in iter(process.stderr.readline, ''):
-                    if not line:
-                        break
-                    print(line.rstrip(), file=sys.stderr)
-                    stderr_lines.append(line)
-
-            # 等待完成
-            stdout, remaining_stderr = process.communicate(timeout=timeout)
-            if remaining_stderr:
-                stderr_lines.append(remaining_stderr)
-
-            stderr_output = ''.join(stderr_lines)
-
-            return SSHResult(
-                success=(process.returncode == 0),
-                stdout=stdout if process.returncode == 0 else f"File downloaded via scp: {remote_path} -> {local_path}",
-                stderr=stderr_output if process.returncode != 0 else "",
-                exit_code=process.returncode
-            )
-        except subprocess.TimeoutExpired:
-            process.kill()
-            return SSHResult(
-                success=False,
-                stdout="",
-                stderr=f"Download timeout after {timeout} seconds",
-                exit_code=-1
-            )
-        except Exception as e:
-            return SSHResult(
-                success=False,
-                stdout="",
-                stderr=f"Download error: {str(e)}",
-                exit_code=-1
-            )
+        return self._run_scp_command(
+            scp_cmd,
+            operation='download',
+            success_message=f"File downloaded via scp: {remote_path} -> {local_path}",
+            timeout=timeout,
+            show_progress=show_progress,
+        )
 
     def test_connection(self) -> SSHResult:
         """
@@ -1167,7 +1109,7 @@ class ParamikoClient:
 
             # 如果有错误输出，也返回
             for line in stderr:
-                yield f"[STDERR] {line.rstrip('\\n')}"
+                yield "[STDERR] " + line.rstrip("\n")
 
         except Exception as e:
             yield f"[ERROR] Execution error: {str(e)}"

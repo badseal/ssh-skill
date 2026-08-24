@@ -27,10 +27,14 @@ import os
 import json
 import argparse
 import re
+import time
+from typing import TextIO
 
 # 添加lib到路径
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_script_dir, 'lib'))
+
+from output_limits import ProgressEmitter
 
 
 def _fix_remote_path(path):
@@ -46,17 +50,28 @@ def _fix_remote_path(path):
     return path
 
 
-def progress_callback(progress):
-    """进度回调：输出 JSON 进度到 stderr"""
-    info = progress.to_dict()
-    try:
-        sys.stderr.write(json.dumps(info, ensure_ascii=True) + '\n')
-        sys.stderr.flush()
-    except Exception:
-        pass
+def make_progress_callback(
+    explicit: bool | None,
+    *,
+    stream: TextIO = sys.stderr,
+    clock=time.monotonic,
+):
+    emitter = ProgressEmitter(stream, enabled=explicit, clock=clock)
+    if not emitter.enabled:
+        return None
+
+    def callback(progress):
+        emitter.emit(
+            'upload',
+            progress.transferred_bytes,
+            progress.total_bytes,
+            file_path=progress.file_path,
+        )
+
+    return callback
 
 
-def main():
+def _legacy_main(argv=None):
     parser = argparse.ArgumentParser(description='SSH file upload tool v3.1')
     parser.add_argument('alias', help='SSH host alias from ~/.ssh/config')
     parser.add_argument('local_path', help='Local file or directory path')
@@ -65,10 +80,14 @@ def main():
                         help='Enable resume for interrupted transfers')
     parser.add_argument('--recursive', action='store_true',
                         help='Upload directory recursively')
-    parser.add_argument('--no-progress', action='store_true',
-                        help='Disable progress output')
+    progress_group = parser.add_mutually_exclusive_group()
+    progress_group.add_argument('--progress', dest='progress', action='store_true',
+                                help='Enable bounded JSONL progress on stderr')
+    progress_group.add_argument('--no-progress', dest='progress', action='store_false',
+                                help='Disable progress output')
+    parser.set_defaults(progress=None)
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     remote_path = _fix_remote_path(args.remote_path)
 
     try:
@@ -103,7 +122,7 @@ def main():
                 }, ensure_ascii=True, indent=2), file=sys.stderr)
                 sys.exit(1)
 
-            result = client.upload(local_path, remote_path, show_progress=not args.no_progress)
+            result = client.upload(local_path, remote_path, show_progress=args.progress is True)
             print(json.dumps({
                 'success': result.success,
                 'stdout': result.stdout,
@@ -133,7 +152,7 @@ def main():
 
             # 创建传输器
             from sftp_transfer import SFTPTransfer
-            cb = None if args.no_progress else progress_callback
+            cb = make_progress_callback(args.progress)
             transfer = SFTPTransfer(sftp, progress_callback=cb)
 
             local_path = os.path.abspath(args.local_path)
@@ -186,5 +205,14 @@ def main():
         sys.exit(1)
 
 
+def main(argv=None):
+    from ssh_skill import delegate_legacy_entrypoint
+
+    arguments = sys.argv[1:] if argv is None else list(argv)
+    return delegate_legacy_entrypoint(
+        'upload', arguments, legacy_main=_legacy_main
+    )
+
+
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

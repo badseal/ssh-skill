@@ -6,7 +6,7 @@
 更新 SSH config：
 1. 移除 password 字段
 2. 添加 IdentityFile 配置
-3. 将密码保存到 tags 中（格式：pwd:原密码）
+3. 不复制、打印或另存原密码
 """
 
 import sys
@@ -81,10 +81,6 @@ def migrate_to_key_auth(alias, key_file):
         print(f"警告: {alias} 没有配置密码，可能已经是密钥认证")
         return False
 
-    # 更新 tags：添加 pwd:密码
-    if password_value:
-        tags_value.append(f"pwd:{password_value}")
-
     # 移除 password 行
     if password_index != -1:
         lines[password_index] = ''
@@ -126,7 +122,7 @@ def migrate_to_key_auth(alias, key_file):
 
     print(f"✓ 已将 {alias} 迁移到密钥认证")
     print(f"  - 密钥文件: ~/.ssh/{key_file}")
-    print(f"  - 原密码已保存到 tags 中")
+    print(f"  - 原明文密码已从配置中移除")
 
     return True
 

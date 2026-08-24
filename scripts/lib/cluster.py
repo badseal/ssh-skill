@@ -9,9 +9,11 @@ from typing import List, Dict, Optional, Union
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
+    from .cluster_plan import ClusterPlan, resolve_cluster_plan
     from .config_v3 import SSHConfigLoaderV3
     from .native_ssh_client import SSHResult
 except ImportError:
+    from cluster_plan import ClusterPlan, resolve_cluster_plan
     from config_v3 import SSHConfigLoaderV3
     from native_ssh_client import SSHResult
 
@@ -19,7 +21,8 @@ except ImportError:
 class SSHCluster:
     """SSH集群管理类 v3.1，从 SSH config 读取服务器列表，智能选择客户端类型"""
 
-    def __init__(self, clients: Dict[str, object], max_workers: int = 10):
+    def __init__(self, clients: Dict[str, object], max_workers: int = 10,
+                 client_errors: Dict[str, str] | None = None):
         """
         初始化集群
 
@@ -29,6 +32,7 @@ class SSHCluster:
         """
         self.clients = clients
         self.max_workers = max_workers
+        self.client_errors = client_errors or {}
 
     @classmethod
     def from_ssh_config(cls, aliases: List[str] = None,
@@ -46,60 +50,34 @@ class SSHCluster:
         """
         loader = SSHConfigLoaderV3()
 
-        if aliases:
-            # 使用指定的别名列表
-            host_list = aliases
-        else:
-            # 从 SSH config 获取所有 Host
-            host_list = cls._list_all_hosts(loader)
+        plan = resolve_cluster_plan(loader, aliases, environment, tags)
+        return cls.from_plan(plan, loader=loader, max_workers=max_workers)
 
-        # 创建客户端（使用智能选择）
+    @classmethod
+    def from_plan(
+        cls,
+        plan: ClusterPlan,
+        *,
+        loader: SSHConfigLoaderV3 | None = None,
+        max_workers: int = 10,
+    ) -> 'SSHCluster':
+        """仅为已经过确认的计划创建客户端。"""
+        loader = loader or SSHConfigLoaderV3()
         clients = {}
-        for alias in host_list:
+        client_errors = {}
+        for alias in plan.targets:
             try:
-                params = loader.get_connection_params(alias)
-                metadata = params.get('metadata', {})
-
-                # 按环境过滤
-                if environment and metadata.get('environment', '') != environment:
-                    continue
-
-                # 按标签过滤
-                if tags:
-                    host_tags = metadata.get('tags', [])
-                    if not any(t in host_tags for t in tags):
-                        continue
-
-                # 使用智能选择创建客户端
                 client = loader.from_alias(alias)
                 clients[alias] = client
-            except Exception:
-                continue  # 跳过无法加载的配置
+            except Exception as exc:
+                client_errors[alias] = str(exc)
 
-        return cls(clients, max_workers)
+        return cls(clients, max_workers, client_errors)
 
     @staticmethod
     def _list_all_hosts(loader: SSHConfigLoaderV3) -> List[str]:
         """从 SSH config 列出所有 Host 别名"""
-        import os
-        import re
-
-        config_path = loader.config_path
-        if not os.path.exists(config_path):
-            return []
-
-        hosts = []
-        with open(config_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                stripped = line.strip()
-                if stripped.startswith('Host ') and not stripped.startswith('Host *'):
-                    match = re.match(r'Host\s+(.+)', stripped)
-                    if match:
-                        alias = match.group(1).strip()
-                        # 跳过通配符
-                        if '*' not in alias and '?' not in alias:
-                            hosts.append(alias)
-        return hosts
+        return loader.list_hosts()
 
     def execute_all(self, command: str, parallel: bool = True,
                     timeout: Optional[int] = None) -> Dict[str, SSHResult]:

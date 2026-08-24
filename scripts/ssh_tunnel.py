@@ -51,6 +51,8 @@ from typing import Optional, Dict, List
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_script_dir, 'lib'))
 
+from security import configure_paramiko_host_keys
+
 
 # === 常量 ===
 TUNNEL_DIR = os.path.join(tempfile.gettempdir(), 'ssh_tunnel')
@@ -284,7 +286,7 @@ class SSHTunnel:
             key_file = os.path.expanduser(key_file)
 
         self._ssh_client = paramiko.SSHClient()
-        self._ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        configure_paramiko_host_keys(self._ssh_client)
 
         # 处理 ProxyJump
         proxy_jump = params.get('proxyjump')
@@ -331,7 +333,7 @@ class SSHTunnel:
         proxy_params = loader.get_connection_params(proxy_jump)
 
         proxy_client = paramiko.SSHClient()
-        proxy_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        configure_paramiko_host_keys(proxy_client)
 
         proxy_host = proxy_params['hostname']
         proxy_port = proxy_params['port']
@@ -754,7 +756,7 @@ def cmd_stop_all(args):
     return 0
 
 
-def main():
+def _legacy_main(argv=None):
     parser = argparse.ArgumentParser(
         description='SSH Tunnel 守护进程管理工具',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -797,7 +799,7 @@ def main():
     parser_daemon.add_argument('remote_port')
     parser_daemon.set_defaults(func=cmd_daemon)
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if not args.command:
         parser.print_help()
@@ -806,6 +808,15 @@ def main():
     return args.func(args)
 
 
+def main(argv=None):
+    from ssh_skill import delegate_legacy_entrypoint
+
+    arguments = sys.argv[1:] if argv is None else list(argv)
+    return delegate_legacy_entrypoint(
+        'tunnel', arguments, legacy_main=_legacy_main
+    )
+
+
 if __name__ == '__main__':
-    sys.exit(main())
+    raise SystemExit(main())
 

@@ -96,6 +96,21 @@ class SSHConfigLoaderV3:
         except Exception:
             return False
 
+    def list_hosts(self) -> List[str]:
+        """返回不含通配符的确定性 Host 别名列表。"""
+        if not os.path.exists(self.config_path):
+            return []
+        aliases = []
+        with open(self.config_path, 'r', encoding='utf-8') as stream:
+            for line in stream:
+                stripped = line.strip()
+                if not stripped.startswith('Host ') or stripped.startswith('Host *'):
+                    continue
+                alias = stripped.split(None, 1)[1].strip()
+                if '*' not in alias and '?' not in alias:
+                    aliases.append(alias)
+        return sorted(set(aliases))
+
     def load_metadata(self, alias: str) -> dict:
         """
         从注释中加载元数据
@@ -111,7 +126,8 @@ class SSHConfigLoaderV3:
             'environment': 'unknown',
             'tags': [],
             'location': '',
-            'password': ''
+            'password': '',
+            'warnings': [],
         }
 
         # 读取 config 文件，查找该 Host 前的注释
@@ -177,6 +193,9 @@ class SSHConfigLoaderV3:
                 elif key == 'password':
                     metadata['password'] = value
 
+        if metadata.get('password'):
+            metadata['warnings'].append('deprecated_plaintext_password')
+
         return metadata
 
     def get_connection_params(self, alias: str) -> dict:
@@ -198,6 +217,7 @@ class SSHConfigLoaderV3:
             'user': config.get('user'),
             'port': int(config.get('port', 22)),
             'timeout': 30,  # 默认超时
+            'warnings': list(metadata.get('warnings', [])),
         }
 
         # 密钥文件

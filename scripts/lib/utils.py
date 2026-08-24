@@ -9,6 +9,8 @@ import platform
 import subprocess
 from typing import Optional
 
+from .platform_adapter import find_openssh, normalize_platform
+
 
 def check_ssh_available() -> bool:
     """
@@ -17,12 +19,16 @@ def check_ssh_available() -> bool:
     Returns:
         安装了返回True，否则返回False
     """
+    executable = find_openssh(normalize_platform())
+    if not executable:
+        return False
     try:
-        result = subprocess.run(
-            ["ssh", "-V"],
+        subprocess.run(
+            [executable, "-V"],
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
+            shell=False,
         )
         return True
     except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -36,12 +42,16 @@ def get_ssh_version() -> Optional[str]:
     Returns:
         版本字符串，如果获取失败返回None
     """
+    executable = find_openssh(normalize_platform())
+    if not executable:
+        return None
     try:
         result = subprocess.run(
-            ["ssh", "-V"],
+            [executable, "-V"],
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=5,
+            shell=False,
         )
         # SSH版本信息通常输出到stderr
         version_str = result.stderr.strip() if result.stderr else result.stdout.strip()

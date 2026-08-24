@@ -57,9 +57,17 @@ import os
 import json
 import argparse
 import re
+import shutil
+import tempfile
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
+
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_script_dir, 'lib'))
+
+from security import redact_sensitive
+from result_protocol import error_result, success_result, write_result
 
 # 修复 Windows 终端 UTF-8 输出
 if sys.platform == 'win32':
@@ -72,6 +80,32 @@ except ImportError:
     print("错误: 需要安装 paramiko 库", file=sys.stderr)
     print("请运行: pip install paramiko", file=sys.stderr)
     sys.exit(1)
+
+
+def backup_file(path: Path | str, timestamp: str | None = None) -> Path:
+    source = Path(path)
+    stamp = timestamp or datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup = source.with_name(f"{source.name}.backup-{stamp}")
+    if backup.exists():
+        raise FileExistsError(f"backup already exists: {backup}")
+    shutil.copy2(source, backup)
+    return backup
+
+
+def _atomic_write_lines(path: Path, lines: List[str]) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        dir=str(path.parent),
+        text=True,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, 'w', encoding='utf-8', newline='') as stream:
+            stream.writelines(lines)
+        shutil.copymode(path, temporary)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 class SSHConfigManager:
@@ -559,75 +593,87 @@ class SSHConfigManager:
 
         return new_config
 
-    def delete_host(self, alias: str) -> bool:
-        """
-        删除 Host 配置（包括注释元数据）
+    def preview_delete_host(self, alias: str) -> Optional[dict]:
+        """返回删除范围和脱敏摘要，不修改配置。"""
+        path = Path(self.config_path)
+        lines = path.read_text(encoding='utf-8').splitlines(keepends=True)
+        host_index = None
+        for index, line in enumerate(lines):
+            match = re.match(r'Host\s+(.+)', line.strip())
+            if match and match.group(1).strip() == alias:
+                host_index = index
+                break
+        if host_index is None:
+            return None
 
-        Args:
-            alias: 主机别名
+        start = host_index
+        while start > 0:
+            previous = lines[start - 1].strip()
+            if previous and not previous.startswith('#'):
+                break
+            start -= 1
 
-        Returns:
-            是否成功删除
-        """
-        # 检查别名是否存在
-        if self.get_host_config(alias) is None:
-            return False
+        end = host_index + 1
+        while end < len(lines):
+            stripped = lines[end].strip()
+            if stripped.startswith('Host ') or stripped.startswith('# ====='):
+                break
+            end += 1
 
-        # 读取配置文件
-        with open(self.config_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
+        config = self.get_host_config(alias) or {}
+        metadata = self.parse_metadata_from_comments(lines[start:host_index])
+        identity_files = config.get('identityfile', [])
+        identity_file = (
+            identity_files[0]
+            if isinstance(identity_files, list) and identity_files
+            else identity_files or None
+        )
+        return {
+            'alias': alias,
+            'hostname': config.get('hostname'),
+            'user': config.get('user'),
+            'port': int(config.get('port', 22)),
+            'identity_file': identity_file,
+            'environment': metadata.get('environment', 'unknown'),
+            'description': metadata.get('description', ''),
+            'line_start': start + 1,
+            'line_end': end,
+            '_start': start,
+            '_end': end,
+            '_lines': lines,
+        }
 
-        # 查找并删除配置块（包括前面的注释）
-        new_lines = []
-        i = 0
-        skip_comments = []
+    def delete_host(
+        self,
+        alias: str,
+        *,
+        apply: bool = False,
+        timestamp: str | None = None,
+    ) -> dict:
+        """预览或在备份后原子删除 Host 配置。"""
+        preview = self.preview_delete_host(alias)
+        if preview is None:
+            return {'applied': False, 'found': False, 'alias': alias}
 
-        while i < len(lines):
-            line = lines[i]
-            stripped = line.strip()
+        public_preview = {
+            key: value for key, value in preview.items() if not key.startswith('_')
+        }
+        if not apply:
+            return {'applied': False, 'found': True, 'host': public_preview}
 
-            # 收集注释行
-            if stripped.startswith('#') or not stripped:
-                skip_comments.append(line)
-                i += 1
-                continue
-
-            # 检查是否是目标 Host 行
-            if stripped.startswith('Host '):
-                host_match = re.match(r'Host\s+(.+)', stripped)
-                if host_match and host_match.group(1).strip() == alias:
-                    # 找到目标 Host，跳过它和它的配置行
-                    i += 1
-                    # 跳过缩进的配置行
-                    while i < len(lines):
-                        next_line = lines[i]
-                        if next_line.strip() and not next_line.startswith((' ', '\t', '#')):
-                            break
-                        i += 1
-                    # 清空收集的注释（这些注释属于被删除的 Host）
-                    skip_comments = []
-                    continue
-                else:
-                    # 不是目标 Host，保留收集的注释和这个 Host
-                    new_lines.extend(skip_comments)
-                    skip_comments = []
-                    new_lines.append(line)
-                    i += 1
-            else:
-                # 其他行，保留收集的注释和这一行
-                new_lines.extend(skip_comments)
-                skip_comments = []
-                new_lines.append(line)
-                i += 1
-
-        # 保留最后的注释（如果有）
-        new_lines.extend(skip_comments)
-
-        # 写回文件
-        with open(self.config_path, 'w', encoding='utf-8') as f:
-            f.writelines(new_lines)
-
-        return True
+        path = Path(self.config_path)
+        backup = backup_file(path, timestamp)
+        new_lines = (
+            preview['_lines'][:preview['_start']]
+            + preview['_lines'][preview['_end']:]
+        )
+        _atomic_write_lines(path, new_lines)
+        return {
+            'applied': True,
+            'found': True,
+            'host': public_preview,
+            'backup_path': str(backup),
+        }
 
     def find_host(self, query: str) -> List[Tuple[str, dict, dict]]:
         """
@@ -717,13 +763,16 @@ class SSHConfigManager:
         export_data = {
             "version": "3.1",
             "exported_at": datetime.now().isoformat(),
-            "hosts": []
+            "hosts": [],
+            "warnings": [],
         }
 
         hosts_with_metadata = self.read_config_with_metadata()
 
         for alias, metadata, _, _ in hosts_with_metadata:
             config = self.get_host_config(alias)
+            if metadata.get('password'):
+                export_data['warnings'].append('deprecated_plaintext_password')
 
             host_data = {
                 "alias": alias,
@@ -732,11 +781,12 @@ class SSHConfigManager:
                 "port": config.get('port', 22),
                 "identity_file": config.get('identityfile', [None])[0] if config.get('identityfile') else None,
                 "proxy_jump": config.get('proxyjump'),
-                "metadata": metadata
+                "metadata": redact_sensitive(metadata)
             }
 
             export_data['hosts'].append(host_data)
 
+        export_data['warnings'] = sorted(set(export_data['warnings']))
         return export_data
 
 
@@ -786,10 +836,13 @@ def cmd_list_servers(args):
             return
 
         result_list = []
+        warnings = []
         for alias, config, meta in servers:
             # 补充密码信息（从 config_v3 加载，注释元数据中的 password 字段）
             if 'password' not in meta:
                 meta['password'] = _load_password_metadata(manager, alias)
+            if meta.get('password'):
+                warnings.append('deprecated_plaintext_password')
 
             result_list.append({
                 'alias': alias,
@@ -805,7 +858,8 @@ def cmd_list_servers(args):
         print(json.dumps({
             'success': True,
             'count': len(result_list),
-            'servers': result_list
+            'servers': result_list,
+            'warnings': sorted(set(warnings)),
         }, ensure_ascii=False, indent=2))
 
     except Exception as e:
@@ -859,6 +913,16 @@ def cmd_find(args):
 
 def cmd_create(args):
     """创建服务器配置"""
+    if getattr(args, 'password', None) is not None:
+        print(json.dumps({
+            'success': False,
+            'error': {
+                'code': 'plaintext_password_write_disabled',
+                'message': '不再允许将新密码写入 SSH config，请改用密钥或系统凭据存储',
+            },
+        }, ensure_ascii=False), file=sys.stderr)
+        raise SystemExit(1)
+
     try:
         manager = SSHConfigManager()
 
@@ -899,6 +963,16 @@ def cmd_create(args):
 
 def cmd_update(args):
     """更新服务器配置"""
+    if getattr(args, 'password', None) is not None:
+        print(json.dumps({
+            'success': False,
+            'error': {
+                'code': 'plaintext_password_write_disabled',
+                'message': '不再允许将新密码写入 SSH config，请改用密钥或系统凭据存储',
+            },
+        }, ensure_ascii=False), file=sys.stderr)
+        raise SystemExit(1)
+
     try:
         manager = SSHConfigManager()
 
@@ -952,20 +1026,26 @@ def cmd_delete(args):
     """删除服务器配置"""
     try:
         manager = SSHConfigManager()
+        mutation = manager.delete_host(
+            args.alias,
+            apply=getattr(args, 'apply', False),
+        )
+        if not mutation.get('found'):
+            result = error_result(
+                'config.delete',
+                code='host_not_found',
+                message=f'服务器 {args.alias} 不存在',
+            )
+            write_result(result, stream=sys.stderr)
+            raise SystemExit(1)
 
-        success = manager.delete_host(args.alias)
-
-        if success:
-            print(json.dumps({
-                'success': True,
-                'message': f'服务器 {args.alias} 已删除'
-            }, ensure_ascii=False, indent=2))
-        else:
-            print(json.dumps({
-                'success': False,
-                'error': f'服务器 {args.alias} 不存在'
-            }, ensure_ascii=False, indent=2), file=sys.stderr)
-            sys.exit(1)
+        data = {
+            'mode': 'apply' if mutation['applied'] else 'preview',
+            'host': mutation['host'],
+        }
+        if mutation.get('backup_path'):
+            data['backup_path'] = mutation['backup_path']
+        write_result(success_result('config.delete', data), stream=sys.stdout)
 
     except Exception as e:
         print(json.dumps({
@@ -1001,7 +1081,7 @@ def cmd_export(args):
         sys.exit(1)
 
 
-def main():
+def _legacy_main(argv=None):
     parser = argparse.ArgumentParser(
         description='SSH Config 管理工具 v3.1（基于注释元数据）',
         formatter_class=argparse.RawDescriptionHelpFormatter
@@ -1024,6 +1104,7 @@ def main():
     create_parser.add_argument('--host', required=True, help='主机地址')
     create_parser.add_argument('--user', required=True, help='用户名')
     create_parser.add_argument('--key', help='密钥文件路径')
+    create_parser.add_argument('--password', help='已禁用：不得写入明文密码')
     create_parser.add_argument('--port', type=int, default=22, help='端口号')
     create_parser.add_argument('--jump', help='跳板机别名')
     create_parser.add_argument('--environment', default='development', help='环境类型')
@@ -1037,6 +1118,7 @@ def main():
     update_parser.add_argument('--host', help='主机地址')
     update_parser.add_argument('--user', help='用户名')
     update_parser.add_argument('--key', help='密钥文件路径')
+    update_parser.add_argument('--password', help='已禁用：不得写入明文密码')
     update_parser.add_argument('--port', type=int, help='端口号')
     update_parser.add_argument('--jump', help='跳板机别名')
     update_parser.add_argument('--environment', help='环境类型')
@@ -1047,12 +1129,14 @@ def main():
     # delete 命令
     delete_parser = subparsers.add_parser('delete', help='删除服务器配置')
     delete_parser.add_argument('alias', help='主机别名')
+    delete_parser.add_argument('--apply', action='store_true',
+                               help='确认备份并删除配置')
 
     # export 命令
     export_parser = subparsers.add_parser('export', help='导出配置')
     export_parser.add_argument('--output', help='输出文件路径')
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if not args.command:
         parser.print_help()
@@ -1073,5 +1157,14 @@ def main():
         cmd_export(args)
 
 
+def main(argv=None):
+    from ssh_skill import delegate_legacy_entrypoint
+
+    arguments = sys.argv[1:] if argv is None else list(argv)
+    return delegate_legacy_entrypoint(
+        'config', arguments, legacy_main=_legacy_main
+    )
+
+
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())
