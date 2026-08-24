@@ -15,6 +15,8 @@ python "<SSH_SKILL_ROOT>\scripts\ssh_skill.py" upload example-host "C:\Temp\app.
 - Do not wrap the call in a second PowerShell command string.
 - The runtime prefers `%SystemRoot%\System32\OpenSSH\ssh.exe`, then PATH.
 - The local agent check uses the Windows `ssh-agent` service and `ssh-add.exe`.
+- Parse stdout as the single result and stderr as optional progress. Both use
+  ASCII-safe JSON, including when local or remote paths contain non-ASCII text.
 
 If `python` is unavailable, select an installed Python 3.10-3.13 executable
 without changing the SSH operation or adding a shell wrapper.

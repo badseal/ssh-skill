@@ -24,7 +24,8 @@ Options: `--timeout <seconds>`, `--no-daemon`.
 
 Keep the remote command as one argument. The CLI passes it to SSH without a
 local shell wrapper. A failed response with `error.code=outcome_unknown` must
-not be replayed automatically.
+not be replayed automatically. OpenSSH or Paramiko timeouts after dispatch use
+this code with `retryable=false`.
 
 ## Upload And Download
 
@@ -36,6 +37,8 @@ not be replayed automatically.
 Options: `--resume`, `--recursive`, `--progress`, `--no-progress`.
 
 Local paths follow the local OS. Remote paths remain POSIX paths on every OS.
+With `--recursive`, result details retain at most 100 head/tail file samples;
+the aggregate count still reports every processed file.
 
 ## Server-To-Server Transfer
 
@@ -62,7 +65,15 @@ Filters: `--hosts`, `--environment`, `--tags`. Execution options:
 `--confirm-production`.
 
 The first call previews targets. Production targets require both `--apply` and
-`--confirm-production`.
+`--confirm-production`. A per-host timeout after dispatch is `outcome_unknown`
+and non-retryable; report completed hosts separately and do not replay them.
+
+## Result And Progress Streams
+
+- stdout contains one JSON result capped at 256 KiB.
+- `--progress` emits bounded, real-time, ASCII-safe JSONL events on stderr.
+- Consume stdout and stderr separately. A closed progress consumer does not
+  change the operation result.
 
 ## Configuration
 

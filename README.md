@@ -6,13 +6,20 @@
 Python CLI 封装远程命令、文件传输、服务器间传输、批量操作、配置管理、
 隧道和连接守护进程，并为 Windows、macOS、Linux 提供一致的结果协议。
 
+**当前稳定主版本：v4.0.0。** 新的 AI 调用应使用统一入口和 v4 结果协议；
+旧脚本仅作为迁移兼容入口保留。
+
 ## v4 重点
 
 - 所有新调用统一进入 `scripts/ssh_skill.py`。
 - stdout 只输出一个 `schema_version=1.0` 的 JSON 文档。
 - 远程命令按单独参数传递，不经过本地 PowerShell/Bash/Zsh 二次解析。
-- 守护进程请求使用请求 ID；`outcome_unknown` 不会自动重放。
-- 输出和进度有界，非交互环境默认不输出进度。
+- OpenSSH、Paramiko 和集群执行在请求发出后超时时统一返回
+  `outcome_unknown`、`retryable=false`，防止 AI 自动重放副作用。
+- 统一入口可在 stderr 实时转发有界 JSONL 进度；事件使用 ASCII-safe JSON，
+  可被 Windows 控制台和三个桌面平台稳定解析。
+- 顶层 JSON 结果限制为 256 KiB；递归传输明细最多保留 100 条首尾样本，
+  同时保留真实总数，避免大目录占满 AI 上下文。
 - 主机密钥默认采用 `accept-new`，已知密钥冲突会被拒绝。
 - 集群默认只预览；执行需要 `--apply`，生产目标还需要
   `--confirm-production`。
@@ -29,6 +36,8 @@ Python CLI 封装远程命令、文件传输、服务器间传输、批量操作
 
 发布门槛覆盖 Python 3.10、3.11、3.12、3.13。运行时需要 Python、OpenSSH
 客户端和 Paramiko。Python 3.8/3.9 仅尽力兼容，不属于正式测试矩阵。
+v4.0.0 发布基线为 115 项离线测试，并由 GitHub Actions 在 Windows、macOS、
+Ubuntu 及 Python 3.10-3.13 上验证。
 
 ## Skill 路径
 
@@ -120,6 +129,10 @@ python scripts/ssh_skill.py cluster "uptime" --environment production --apply --
 当 `error.code=outcome_unknown` 时，命令可能已在远端执行。必须保留 request ID、
 停止自动重试，并通过单独的只读检查确认远端状态。
 
+stdout 顶层结果不会超过 256 KiB。递归传输结果只保留最多 100 条首尾样本，
+`total_files` 等总数字段仍反映真实规模。显式启用的实时进度以独立、
+ASCII-safe 的 JSONL 写入 stderr，不得与 stdout 结果合并。
+
 ## 安全边界
 
 - 不直接拼装 `ssh`、`scp`、`sftp` 或 `rsync` 命令。
@@ -162,6 +175,8 @@ python scripts/ssh_skill.py doctor --help
 ```text
 python -m unittest discover -s tests -v
 ```
+
+v4.0.0 当前发布基线：`115 tests passed`。
 
 自动测试不会连接真实服务器。真实 SSH 冒烟测试、安装同步、推送、标签和发布是
 独立批准步骤。

@@ -7,16 +7,21 @@ Python CLI handles remote execution, file transfer, server-to-server transfer,
 clusters, SSH configuration, tunnels, and connection daemons with one result
 contract across Windows, macOS, and Linux.
 
+**Current stable primary version: v4.0.0.** New AI calls use the unified
+entrypoint and v4 result contract. Legacy scripts remain migration shims only.
+
 ## What Changed In v4
 
 - Every new call enters through `scripts/ssh_skill.py`.
 - stdout contains one `schema_version=1.0` JSON document.
 - Remote command text is passed as one argument without local PowerShell,
   Bash, or Zsh evaluation.
-- Daemon requests use request IDs; `outcome_unknown` is never replayed
-  automatically.
-- Command output and progress are bounded; progress is off by default when
-  noninteractive.
+- OpenSSH, Paramiko, and cluster execution timeouts after dispatch return
+  `outcome_unknown` with `retryable=false`, preventing AI replay of side effects.
+- The unified entrypoint can stream bounded JSONL progress on stderr. Events use
+  ASCII-safe JSON for reliable parsing on Windows and the other desktop OSes.
+- Top-level JSON results are limited to 256 KiB. Recursive transfer details keep
+  at most 100 head/tail samples while preserving the actual total count.
 - Host-key checking defaults to `accept-new`; known-key conflicts are rejected.
 - Cluster calls preview by default. Execution requires `--apply`, and production
   targets also require `--confirm-production`.
@@ -35,6 +40,8 @@ contract across Windows, macOS, and Linux.
 The release matrix covers Python 3.10, 3.11, 3.12, and 3.13. Runtime
 dependencies are Python, an OpenSSH client, and Paramiko. Python 3.8/3.9 are
 best-effort only and are not release gates.
+The v4.0.0 release baseline is 115 offline tests, verified by GitHub Actions on
+Windows, macOS, Ubuntu, and Python 3.10-3.13.
 
 ## Skill Root
 
@@ -129,6 +136,11 @@ When `error.code=outcome_unknown`, the command may have executed remotely.
 Preserve the request ID, stop automatic retry, and use a separate read-only
 check to verify state.
 
+The top-level stdout result is capped at 256 KiB. Recursive transfer results
+retain at most 100 head/tail samples while fields such as `total_files` preserve
+the actual scale. Explicit real-time progress is emitted as separate ASCII-safe
+JSONL on stderr and must not be merged into stdout.
+
 ## Safety Boundary
 
 - Do not construct raw `ssh`, `scp`, `sftp`, or `rsync` commands.
@@ -172,6 +184,8 @@ Run the complete suite:
 ```text
 python -m unittest discover -s tests -v
 ```
+
+Current v4.0.0 release baseline: `115 tests passed`.
 
 Automated tests do not connect to real servers. Real SSH smoke tests, installed
 copy synchronization, push, tags, and releases are separately approved steps.

@@ -25,6 +25,8 @@ configuration changes, agent forwarding, or uncertain execution outcomes.
 - A request that failed before sending bytes may use a safe direct fallback.
 - Once any request bytes were sent, a transport failure can be
   `outcome_unknown`.
+- OpenSSH, Paramiko, and cluster timeouts after dispatch set
+  `retryable=false`; timeout alone is never evidence that replay is safe.
 - Preserve the request ID, stop, and verify remote state by a separate read-only
   operation selected with the user.
 - Never infer idempotency from command text and never replay automatically.
@@ -56,7 +58,10 @@ configuration changes, agent forwarding, or uncertain execution outcomes.
 
 ## Output And Secrets
 
-- stdout contains one bounded JSON result; optional progress is bounded stderr.
+- stdout contains one JSON result capped at 256 KiB; optional progress is
+  bounded, ASCII-safe JSONL on stderr.
+- Recursive transfer details retain at most 100 head/tail samples while the
+  aggregate count preserves the actual number of files.
 - Preserve structured error codes and warnings in summaries.
 - Do not print environment mappings, password values, private keys, or askpass
   material.

@@ -117,8 +117,10 @@ See [references/commands.md](references/commands.md) for complete syntax.
 
 - `exec` uses daemon reuse only where safe; `--no-daemon` is an explicit
   diagnostic escape hatch, not a routine first step.
-- A timeout after request transmission can mean the remote side executed the
-  command. On `outcome_unknown`, stop and ask the user how to verify state.
+- A timeout after request transmission through OpenSSH, Paramiko, or cluster
+  execution can mean the remote side executed the command. The CLI returns
+  `outcome_unknown` with `retryable=false`; stop and ask the user how to verify
+  state.
 - For upload/download, preserve the distinction between local native paths and
   remote POSIX paths. Use `--recursive` only for directories.
 - Use `--resume` when continuing a known interrupted transfer.
@@ -154,9 +156,12 @@ The CLI writes exactly one versioned JSON document to stdout:
 - `error`: stable code, message, retryability, and outcome on failure.
 - `meta`: request ID, platform, transport, elapsed time, and warnings.
 
-Progress, when explicitly enabled, is bounded JSONL on stderr. Do not merge it
-with stdout. If output is truncated, disclose truncation and use the retained
-diagnostic tail instead of rerunning solely to obtain more output.
+The top-level stdout result is capped at 256 KiB. Recursive transfer details
+retain at most 100 head/tail samples while their total-count fields preserve the
+actual scale. Progress, when explicitly enabled, is real-time, bounded,
+ASCII-safe JSONL on stderr. Do not merge it with stdout. If output is truncated,
+disclose truncation and use the retained diagnostic tail instead of rerunning
+solely to obtain more output.
 
 ## Safety Defaults
 

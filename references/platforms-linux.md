@@ -13,6 +13,8 @@ python3 "<SSH_SKILL_ROOT>/scripts/ssh_skill.py" upload example-host "./app.tar.g
 - Keep the remote command as one process argument.
 - Do not add a nested shell command string.
 - `SSH_AUTH_SOCK` is used only for local agent diagnosis.
+- Parse the single stdout result separately from optional real-time JSONL
+  progress on stderr.
 
 Use the distribution's package manager only when doctor reports a missing
 dependency and the user has authorized installation. Python 3.10-3.13 is the
