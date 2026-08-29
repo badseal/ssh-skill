@@ -175,17 +175,21 @@ def try_daemon_execute(
 
 
 def start_daemon_background(alias):
-    """后台启动守护进程"""
+    """后台启动守护进程（脱离当前作业对象，命令会话结束后继续存活）"""
     daemon_script = os.path.join(_script_dir, 'ssh_daemon.py')
     try:
         if os.name == 'nt':
-            # Windows: 使用 CREATE_NO_WINDOW
-            CREATE_NO_WINDOW = 0x08000000
+            # Windows: DETACHED_PROCESS 无控制台；CREATE_BREAKAWAY_FROM_JOB
+            # 使守护进程脱离父作业对象，父进程（AI 命令会话）结束后仍存活。
+            # 仅用 CREATE_NO_WINDOW 时，守护进程会被会话作业对象连带回收。
+            DETACHED_PROCESS = 0x00000010
+            CREATE_NEW_PROCESS_GROUP = 0x00000200
+            CREATE_BREAKAWAY_FROM_JOB = 0x01000000
             subprocess.Popen(
                 [sys.executable, daemon_script, 'start', alias],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                creationflags=CREATE_NO_WINDOW
+                creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB
             )
         else:
             subprocess.Popen(
@@ -194,11 +198,13 @@ def start_daemon_background(alias):
                 stderr=subprocess.DEVNULL,
                 start_new_session=True
             )
-        # 等待守护进程启动
+        # 等待守护进程完成 SSH 连接并写入信息文件。
+        # 信息文件在 SSH 连接建成后（跨境握手可达 6-8 秒）才写入，
+        # 原来的 10×0.3s 必然超时，导致每次调用都重新拉起/直连。
         import time
-        for _ in range(10):
-            time.sleep(0.3)
-            from ssh_daemon import read_daemon_info
+        from ssh_daemon import read_daemon_info
+        for _ in range(40):
+            time.sleep(0.5)
             if read_daemon_info(alias):
                 return True
         return False
@@ -293,9 +299,10 @@ def run_exec(alias, command, *, timeout=30, no_daemon=False):
     from config_v3 import SSHConfigLoaderV3
 
     loader = SSHConfigLoaderV3()
-    params = loader.get_connection_params(alias)
-    has_password = params.get('password') is not None
-    use_daemon = has_password and not no_daemon
+    loader.get_connection_params(alias)  # 早失败：别名不存在时立即报错，不进入守护进程等待
+    # 守护进程对密钥/密码认证统一启用：密钥认证服务器同样需要连接复用，
+    # 否则每次调用都要重新 SSH 握手（跨境线路实测约 6 秒/次）。
+    use_daemon = not no_daemon
 
     if use_daemon:
         attempt = try_daemon_execute(alias, command, timeout)
